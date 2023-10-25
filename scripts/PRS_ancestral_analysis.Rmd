@@ -1,0 +1,1347 @@
+This document describes the analysis of polygenic risk scores for traits and diseases from the UK Biobank. PRS distributions were generated for six continental populations: Africa (AFR), the Americas (AMR), Europe (EUR), East Asia (EAS) and South Asia (SAS) from the 1kGP database, and Oceania (OCE) from the NCIG database. Statistical tests (Tukey's HSD test) and index SNP analysis are demonstrated. For subpopulation-level analysis, see notebook "PRS_subpop_analysis.Rmd". 
+
+Polygenic risk scores were calculated in plink 1.9 by first performing LD-clumping (--clump flag) and summing the weighted effect sizes of the resulting index SNPs (--score). Note that the clumping output of the 1kGP European cohort was used for all other ancestral populations. PRS were generated for the control and FST-filtered summary statistics using the default clumping parameters. See bash scripts "PRS_control.sh", "PRS_tertiles.sh", and "PRS_T3_excluded.sh" for details.
+
+
+# Packages
+
+```{r}
+library(tidyverse)
+library(reshape2)
+```
+
+
+
+# Summary table of index SNPs
+
+The LD-clumping process resulted in varying numbers of index SNPs for each PRS. The number of index SNPs for each subset was obtained by reading the number of rows of the .clumped plink output files. A results table was created to store this information, as shown below. 
+
+```{r}
+# Load empty dataframe containing phenotype, phenotype code, and pre-made columns for storage
+prs_results <- read_delim("prs_results_metadata.txt", delim = "\t", col_names = T)
+
+# Read and store number of index SNPs per subset
+subsets <- c("control", "q3_excluded", "q1", "q2", "q3")
+
+for (subset in subsets) {
+  for (i in seq_along(prs_results$phenotype)) {
+    pheno_code <- prs_results$pheno_code[i]
+  
+    file_path <- file.path("/PRS", pheno_code, subset, "EUR_LD_p0.0001.clumped")
+    clump_data <- read_table(file_path, col_names = TRUE)
+  
+    clumps <- as.character(nrow(clump_data))
+  
+    prs_results[[paste0("clumps_", subset)]][i] <- clumps
+  }
+}
+
+# Save
+write_delim(prs_results, "/PRS/prs_results_subsetClumps.txt", delim = "\t", col_names = T)
+```
+
+
+
+# PRS visualised
+
+The following subsections contain generate PRS from various subsets. 
+
+
+## Control and FST Tertile PRS
+
+The first code generates separate plots for each tertile (or control set) of a given phenotype, while the second generates multi-panel figures for all phenotypes. Note that some file names use "quantile" instead of "tertile".
+
+
+### One tertile, one phenotype
+
+```{r}
+# Specify phenotype here
+pheno_code <- "T2D"
+phenotype <- "Type II Diabetes"
+
+directory_list <- c("control", "q3", "q2", "q1")
+file_suffix_list <- c("control_p0.0001.profile", "q3_p0.0001.profile", "q2_p0.0001.profile", "q1_p0.0001.profile")
+pops <- c("AFR", "AMR", "EAS", "EUR", "SAS", "OCE")
+total_scores <- list()
+plots <- list()
+
+for (i in seq_along(directory_list)) {
+  directory <- directory_list[i]
+  file_suffix <- file_suffix_list[i]
+
+  setwd(file.path("/PRS/", pheno_code, directory))
+
+  total_score <- data.frame()
+
+  for (pop in pops) {
+    file_path <- sprintf("PRS_%s_%s_UKB_%s", pop, pheno_code, file_suffix)
+    data <- read_table(file_path, col_names = TRUE) %>% mutate(POP = pop)
+    total_score <- bind_rows(total_score, data)
+  }
+
+  # Standardise
+  total_score <- mutate(total_score, SCORE = scale(SCORE))
+  
+    ## Assign to list for downstream statistical analysis
+    total_scores[[i]] <- total_score
+
+  # Bring OCE forward to highlight
+  total_score$POP <- factor(total_score$POP, levels = pops)
+
+  # Generate plot titles
+  plot_title <- switch(
+    directory,
+    "control" = paste0(phenotype, " - Control"),
+    "q3" = paste0(phenotype, " - Q3"),
+    "q2" = paste0(phenotype, " - Q2"),
+    "q1" = paste0(phenotype, " - Q1"),
+  )
+  
+  # Plot
+  PRS <- ggplot(total_score, aes(x = SCORE, fill = POP)) +
+    geom_density(alpha = 0.7) +
+    scale_x_continuous(name = "Polygenic Risk Score", limits = c(-5, 5)) +
+    theme_light() +
+    scale_fill_manual(values = c("#FF0000", "#00FF00", "#EE82EE", "#1E90FF", "#FF8C00", "forestgreen")) +
+    labs(title = plot_title, fill = "Superpopulation") +
+    ylab("Density") +
+    theme(plot.title = element_text(hjust = 0.5))
+  
+  plots[[i]] <- PRS
+}
+
+# To display each separately:
+plots[[1]]
+plots[[2]]
+plots[[3]]
+plots[[4]]
+```
+
+
+
+### All tertiles, all phenotypes
+
+```{r}
+#prs_combined <- list()
+
+for (i in seq_along(prs_results$pheno_code)) {
+  pheno_code <- prs_results$pheno_code[i]
+  phenotype <- prs_results$phenotype[i]
+
+directory_list <- c("control", "q3", "q2", "q1")
+file_suffix_list <- c("control_p0.0001.profile", "q3_p0.0001.profile", "q2_p0.0001.profile", "q1_p0.0001.profile")
+pops <- c("AFR", "AMR", "EAS", "EUR", "SAS", "OCE")
+total_scores <- list()
+plots <- list()
+
+all_quantiles <- NULL
+
+for (i in seq_along(directory_list)) {
+  directory <- directory_list[i]
+  file_suffix <- file_suffix_list[i]
+
+  setwd(file.path("/PRS/", pheno_code, directory))
+
+  total_score <- data.frame()
+
+  for (pop in pops) {
+    file_path <- sprintf("PRS_%s_%s_UKB_%s", pop, pheno_code, file_suffix)
+    data <- read_table(file_path, col_names = TRUE) %>% mutate(POP = pop)
+    total_score <- bind_rows(total_score, data)
+  }
+
+  # Standardise
+  total_score <- mutate(total_score, SCORE = scale(SCORE))
+  
+    ## Assign to list for downstream statistical analysis
+    total_scores[[i]] <- total_score
+
+  # Bring OCE forward to highlight
+  total_score$POP <- factor(total_score$POP, levels = pops)
+  
+  # Add column containing quantile name
+  total_score <- mutate(total_score, quantile = directory)
+  
+  all_quantiles <- bind_rows(all_quantiles, total_score)
+}
+
+# Add phenotype to combined dataframe
+all_quantiles <- mutate(all_quantiles, Phenotype = phenotype)
+
+# Convert quantile to factor with desired order
+all_quantiles$quantile <- factor(all_quantiles$quantile, levels = unique(all_quantiles$quantile))
+
+# Set quantile names for figure
+  ## Extract number of clumps for phenotype
+  clump_data <- prs_results[prs_results$pheno_code == pheno_code, ]
+
+  ## Incorporate into quantile name
+  quantile_names <- c(
+  control = paste0("Control (n = ", clump_data$clumps_control, ")"),
+  q3 = paste0("T3 (n = ", clump_data$clumps_q3, ")"),
+  q2 = paste0("T2 (n = ", clump_data$clumps_q2, ")"),
+  q1 = paste0("T1 (n = ", clump_data$clumps_q1, ")")
+)
+
+# Plot - note that axes titles and legend were removed for thesis layout
+PRS <- ggplot(all_quantiles, aes(x = SCORE, fill = POP)) +
+  geom_density(alpha = 0.7) +
+  scale_x_continuous(name = "Polygenic Risk Score", limits = c(-5, 5), breaks = c(-4, -2, 0, 2, 4)) +
+  theme_light() +
+  scale_fill_manual(values = c("#FE2712", "#6AD749", "#EE82EE", "#29B6F6", "#FF8C00", "forestgreen")) +
+  labs(title = phenotype, x = " ", y = NULL) + #y = "Density", fill = "Superpopulation")
+  facet_wrap(~quantile, scales = "fixed", nrow = 1, labeller = as_labeller(quantile_names)) +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5), 
+        axis.title.x = element_text(colour = "white"),
+        axis.text.y.left = element_text(margin = margin(b = 15), size = 16),
+        axis.text.x.bottom = element_text(size = 16),
+        #axis.title.y.left = element_text(margin = margin(r = 15, l = 10)),
+        strip.text = element_text(colour = "black", size = 15),
+        text = element_text(family = "Arial", size = 16)) +
+  guides(fill = "none")
+
+#prs_combined[[pheno_code]] <- PRS 
+
+# Save
+ggsave(filename = paste0(pheno_code, "_quantiles.png"), PRS, path = "/figures/quantile_filtering/", width = 28, height = 12, units = "cm", dpi = 600, device = "png")
+
+}
+
+
+# Save the legend separately
+PRS_simplified <-  ggplot(all_quantiles, aes(x = SCORE, fill = POP)) +
+  geom_density(alpha = 0.7) +
+  scale_fill_manual(values = c("#FE2712", "#6AD749", "#EE82EE", "#29B6F6", "#FF8C00", "forestgreen")) +
+  labs(fill = "Superpopulation") +
+  theme(plot.title = element_text(size = 11),
+        text = element_text(family = "Arial"),
+        legend.direction = "horizontal",
+        legend.box = "horizontal",
+        legend.spacing.x = unit(0.4, 'cm')) +
+  guides(fill = guide_legend(nrow = 1, byrow = TRUE))
+  
+legend <- get_legend(PRS_simplified)
+
+ggsave(filename = "legend.png", legend, path = "/figures/quantile_filtering/", width = 28, height = 4, units = "cm", dpi = 600, device = "png")
+```
+
+
+
+## FST-filtered PRS (T3 excluded)
+
+The FST-filtered PRS were visualised as boxplots. The first code chunk generates a figure for a given phenotype, and the second generates figures for all phenotypes.
+
+
+### Single phenotype
+
+```{r}
+# Specify UKB phenotype code and name
+pheno_code <- "T2D"
+phenotype <- "Type II Diabetes"
+
+# Set working directory
+setwd(sprintf("/PRS/%s/q3_excluded/", pheno_code))
+
+# Load and visualise PRS
+pops <- c("AFR", "AMR", "EAS", "EUR", "SAS", "OCE")
+total_score <- data_frame() 
+
+for (pop in pops) {
+  file_path <- sprintf("PRS_%s_%s_UKB_q3_excluded_p0.0001.profile", pop, pheno_code)
+  data <- read_table(file_path, col_names = TRUE) %>% mutate(POP = pop)
+  total_score <- bind_rows(total_score, data)
+}
+
+# Standardise
+total_score <- mutate(total_score, SCORE = scale(SCORE))
+
+# Bring OCE forward
+total_score$POP <- factor(total_score$POP, levels = pops)
+
+# Plot
+prs_filtered <- ggplot(total_score, aes(x = POP, y = SCORE, fill = POP)) +
+  geom_boxplot() +
+  scale_y_continuous(limits = c(-5, 5)) +
+  theme_light() +
+  scale_fill_manual(values = c("#FE2712", "#6AD749", "#EE82EE", "#29B6F6", "#FF8C00", "forestgreen")) +
+  labs(title = phenotype, x = NULL, y = NULL) +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+        text = element_text(family = "Arial", size = 18),
+        axis.title.x = element_text(margin = margin(t = 8))) +
+  guides(fill = FALSE)
+
+ggsave(filename = paste0(pheno_code, "_boxplots_q3.excluded.png"), prs_filtered, path = "/figures/boxplots_q3.excluded/", width = 12, height = 10, units = "cm", dpi = 600, device = "png")
+```
+
+
+### All phenotypes
+
+```{r}
+for (i in seq_along(prs_results$pheno_code)) {
+  pheno_code <- prs_results$pheno_code[i]
+  phenotype <- prs_results$shortened_pheno[i]
+
+# Set working directory
+setwd(sprintf("/PRS/%s/q3_excluded/", pheno_code))
+
+# Load and visualise PRS
+pops <- c("AFR", "AMR", "EAS", "EUR", "SAS", "OCE")
+total_score <- data_frame() 
+
+for (pop in pops) {
+  file_path <- sprintf("PRS_%s_%s_UKB_q3_excluded_p0.0001.profile", pop, pheno_code)
+  data <- read_table(file_path, col_names = TRUE) %>% mutate(POP = pop)
+  total_score <- bind_rows(total_score, data)
+}
+
+# Standardise
+total_score <- mutate(total_score, SCORE = scale(SCORE))
+
+# Bring OCE forward
+total_score$POP <- factor(total_score$POP, levels = pops)
+
+# Plot - note that axes were removed for thesis
+prs_filtered <- ggplot(total_score, aes(x = POP, y = SCORE, fill = POP)) +
+  geom_boxplot() +
+  scale_y_continuous(limits = c(-5, 5)) +
+  theme_light() +
+  scale_fill_manual(values = c("#FE2712", "#6AD749", "#EE82EE", "#29B6F6", "#FF8C00", "forestgreen")) +
+  labs(title = phenotype, x = NULL, y = NULL) +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 17),
+        text = element_text(family = "Arial", size = 18),
+        axis.title.x = element_text(margin = margin(t = 8))) +
+  guides(fill = FALSE)
+
+# Save
+ggsave(filename = paste0(pheno_code, "_boxplots_q3.excluded.png"), prs_filtered, path = "/figures/boxplots_q3.excluded/", width = 12, height = 10, units = "cm", dpi = 600, device = "png")
+}
+```
+
+
+
+# Statistical analysis
+
+## Tukey's HSD tests
+
+Tukey's HSD tests were used to quantify overlap between ancestral PRS distributions. This allowed for comparison between PRS subsets. 
+
+
+### Tertile PRS results
+
+```{r}
+# First turn off scientific notation to aid with analysis of small p values
+options(scipen = 999)
+
+tertiles <- c("control", "q3", "q2", "q1")
+pops <- c("AFR", "AMR", "EAS", "EUR", "SAS", "OCE")
+
+combined_tukey <- list()
+
+for (subset in tertiles) {
+  tukey_results <- list() 
+
+  for (i in seq_along(prs_results$pheno_code)) {
+    pheno_code <- prs_results$pheno_code[i]
+    ## Generate combined data frame storing all population PRS data
+    total_score <- data.frame()
+    setwd(sprintf("/PRS/%s/%s/", pheno_code, subset))
+
+    for (pop in pops) {
+      file_path <- sprintf("PRS_%s_%s_UKB_%s_p0.0001.profile", pop, pheno_code, subset)
+      data <- read_table(file_path, col_names = TRUE) %>% mutate(POP = pop)
+      data$SCORE <- as.numeric(data$SCORE)
+      total_score <- bind_rows(total_score, data)
+    }
+
+    ## Standardise PRS
+    total_score <- mutate(total_score, SCORE = scale(SCORE))
+
+    ## ANOVA and Tukey's HSD
+    anova <- aov(SCORE ~ POP, data = total_score)
+    tukey <- TukeyHSD(anova)
+
+    ## Extract p-values from Tukey output as separate matrix, with pairwise comparisons as separate columns
+    tukey_df <- as.data.frame(tukey$POP)
+    tukey_df <- select(tukey_df, `p adj`)
+    tukey_df <- t(tukey_df)
+    rownames(tukey_df) <- NULL
+
+    ## Add pheno_code as column
+    phenotype_code <- rep(pheno_code, nrow(tukey_df))
+    tukey_df <- cbind(tukey_df, phenotype_code)
+
+    ## Store Tukey results for the pheno_code
+    tukey_results[[pheno_code]] <- tukey_df
+  }
+
+  # Store the Tukey results for this subset in the combined_tukey list
+  combined_tukey[[subset]] <- do.call(rbind, tukey_results)
+}
+
+# Save
+control_tukey <- as.data.frame(combined_tukey[["control"]])
+write_delim(control_tukey, "/PRS/tukey_results_control.txt", delim = "\t", col_names = T)
+
+q3_tukey <- as.data.frame(combined_tukey[["q3"]])
+write_delim(q3_tukey, "/PRS/tukey_results_q3.txt", delim = "\t", col_names = T)
+
+q2_tukey <- as.data.frame(combined_tukey[["q2"]])
+write_delim(q2_tukey, "/PRS/tukey_results_q2.txt", delim = "\t", col_names = T)
+
+q1_tukey <- as.data.frame(combined_tukey[["q1"]])
+write_delim(q1_tukey, "/PRS/tukey_results_q1.txt", delim = "\t", col_names = T)
+
+# Return scientific notation if needed
+options(scipen = 0)
+```
+
+
+To calculate how many p-values were statistically significant:
+
+```{r}
+# For control
+tukey_control_sum <- NULL
+
+for (pheno_code in (control_tukey$phenotype_code)) {
+  sig_pairs_control <- control_tukey %>%
+    filter(phenotype_code == pheno_code) %>% 
+    select(where(~ . < 0.05))
+  
+  n <- ncol(sig_pairs_control)
+  
+  tukey_control_sum <- rbind(tukey_control_sum, data.frame(pheno_code, sig_pairs_control = n))
+}
+
+
+# For q3
+tukey_q3_sum <- NULL
+
+for (pheno_code in (q3_tukey$phenotype_code)) {
+  sig_pairs_q3 <- q3_tukey %>% 
+    filter(phenotype_code == pheno_code) %>% 
+    select(where(~ . < 0.05))
+  
+  n <- ncol(sig_pairs_q3)
+  
+  tukey_q3_sum <- rbind(tukey_q3_sum, data.frame(pheno_code = pheno_code, sig_pairs_q3 = n))
+}
+
+
+# For q2
+tukey_q2_sum <- NULL
+
+for (pheno_code in (q2_tukey$phenotype_code)) {
+  sig_pairs_q2 <- q2_tukey %>% 
+    filter(phenotype_code == pheno_code) %>% 
+    select(where(~ . < 0.05))
+  
+  n <- ncol(sig_pairs_q2)
+  
+  tukey_q2_sum <- rbind(tukey_q2_sum, data.frame(pheno_code = pheno_code, sig_pairs_q2 = n))
+}
+
+
+# For q1
+tukey_q1_sum <- NULL
+
+for (pheno_code in (q1_tukey$phenotype_code)) {
+  sig_pairs_q1 <- q1_tukey %>% 
+    filter(phenotype_code == pheno_code) %>% 
+    select(where(~ . < 0.05))
+  
+  n <- ncol(sig_pairs_q1)
+  
+  tukey_q1_sum <- rbind(tukey_q1_sum, data.frame(pheno_code = pheno_code, sig_pairs_q1 = n))
+}
+
+# Save
+write_delim(tukey_q3_sum, "/PRS/tukey_q3_sum.txt", delim = "\t", col_names = T)
+write_delim(tukey_q2_sum, "/PRS/tukey_q2_sum.txt", delim = "\t", col_names = T)
+write_delim(tukey_q1_sum, "/PRS/tukey_q1_sum.txt", delim = "\t", col_names = T)
+```
+
+
+Combine into one dataframe:
+
+```{r}
+tertile_tukey <- list(tukey_control_sum, tukey_q3_sum, tukey_q2_sum, tukey_q1_sum)
+
+tertile_tukey <- tertile_tukey %>% reduce(full_join, by = "pheno_code")
+
+write_delim(tertile_tukey, "/PRS/sig_diff_tertiles.txt", delim = "\t", col_names = T)
+```
+
+
+Key statistics for each subset:
+
+```{r}
+# Control
+summary(tertile_tukey$sig_diff_control)
+sd(tertile_tukey$sig_diff_control)
+
+# T3
+summary(tertile_tukey$sig_pairs_q3)
+sd(tertile_tukey$sig_pairs_q3)
+
+# T2
+summary(tertile_tukey$sig_pairs_q2)
+sd(tertile_tukey$sig_pairs_q2)
+
+# T1
+summary(tertile_tukey$sig_pairs_q1)
+sd(tertile_tukey$sig_pairs_q1)
+
+# Difference between T1 and T3
+summary(tertile_tukey$diff_in_overlap_t3_t1)
+sd(tertile_tukey$diff_in_overlap_t3_t1)
+```
+
+
+Comparison between subsets:
+
+```{r}
+# Phenotypes where T2 has the same overlap as T3
+tertile_tukey %>% filter(sig_pairs_q3 == sig_pairs_q2)
+
+# T3 less differences than T2
+tertile_tukey %>% filter(sig_pairs_q3 < sig_pairs_q2)
+
+# Where T2 = T1
+tertile_tukey %>% filter(sig_pairs_q2 == sig_pairs_q1)
+
+# T2 less differences than T1
+tertile_tukey %>% filter(sig_pairs_q2 < sig_pairs_q1)
+
+# Where control has equal more differences than T3
+tertile_tukey %>% filter(sig_pairs_control >= sig_pairs_q3)
+
+# Where control has equal or less differences than T1
+tertile_tukey %>% filter(sig_pairs_control <= sig_pairs_q1)
+```
+
+
+Is there a correlation between the polygenicity (number of control index SNPs) and the improvement in overlap in T1 vs T3 SNPs?
+
+```{r}
+# Create dataframe containing the number of control index SNPs (from prs_results) and difference in overlaps between T3 and T1.
+index_vs_overlap <- prs_results %>%
+  select(pheno_code, clumps_control) %>%
+  mutate(clumps_control = as.numeric(clumps_control))
+
+  ## Calculate overlap difference between T3 and T1
+  t3_t1_overlap_diff <- tertile_tukey %>%
+    mutate(t3_t1_diff = sig_pairs_q3 - sig_pairs_q1) %>%
+    select(pheno_code, t3_t1_diff)
+
+  ## inner_join
+  index_vs_overlap <- inner_join(index_vs_overlap, t3_t1_overlap_diff, by = "pheno_code")
+  
+# Save
+write_delim(index_vs_overlap, "/PRS/index_vs_overlap.txt", delim = "\t", col_names = T)
+
+# Spearman correlation
+corr <- cor.test(index_vs_overlap$clumps_control, index_vs_overlap$t3_t1_diff, method = "spearman")
+corr
+```
+
+
+Is the difference in SNP set sizes in T1 vs T3 correlated with the improvement in T1? i.e. does T1 having more/less SNPs drive its improvement?
+
+```{r}
+# Calculate size difference of T1 vs T3 sets
+snp_set_diff <- prs_results %>%
+  select(pheno_code, clumps_q1, clumps_q3) %>%
+  mutate(size_diff = clumps_q1 - clumps_q3)
+
+# Combine with information on PRS mean overlap
+size_vs_improvement <- inner_join(snp_set_diff, tertile_tukey, by = "pheno_code")
+
+# Correlation
+corr <- cor.test(size_vs_improvement$size_diff, size_vs_improvement$diff_in_overlap_t3_t1, method = "spearman")
+corr
+```
+
+
+
+#### Visual comparison of tertiles
+
+
+The extent of continental PRS overlap in the T3 vs T1 subsets are visualised as a line graph.
+
+```{r}
+# Convert significant differences into percentage
+tertile_tukey <- tertile_tukey %>%
+  mutate(
+    control_diff_prop = (sig_diff_control / 15) * 100,
+    q3_diff_prop = (sig_pairs_q3 / 15) * 100,
+    q2_diff_prop = (sig_pairs_q2 / 15) * 100,
+    q1_diff_prop = (sig_pairs_q1 / 15) * 100
+  )
+
+# Arrange phenotypes in order of biggest to smallest difference between T3 and T1
+tertile_tukey <- tertile_tukey %>%
+  arrange(desc(diff_in_overlap_t3_t1))
+
+# Plot
+t3_vs_t1 <- ggplot(tertile_tukey, aes(x = pheno_code)) +
+  geom_line(aes(y = q3_diff_prop, color = "T3", group = 1), size = 1) +
+  geom_point(aes(y = q3_diff_prop, color = "T3"), size = 2, shape = 17) +
+  geom_line(aes(y = q1_diff_prop, color = "T1", group = 2), size = 1) +
+  geom_point(aes(y = q1_diff_prop, color = "T1"), size = 2, shape = 19) +
+  scale_color_manual(values = c("T3" = "#0072B2", "T1" = "#D55E00"), name = "Tertile") +
+  labs(
+    y = "Significantly different PRS means (%)",
+    x = "Phenotype"
+  ) +
+  theme_minimal() +
+  theme(
+    text = element_text(family = "Arial", size = 12),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  ) +
+  scale_x_discrete(limits = tertile_tukey$pheno_code)
+
+
+# Save
+ggsave(filename = "t3_vs_t1_lineplot.png", t3_vs_t1, path = "/figures/quantile_filtering/", width = 16, height = 9.4, units = "cm", dpi = 600, device = "png")
+```
+
+
+Line plot demonstrating the tertile trends in three specific phenotypes:
+```{r}
+# Extract examples
+tertile_trend_examples <- tertile_tukey %>%
+  subset(pheno_code %in% c("HT", "OSFA", "EGCR")) %>%
+  select(pheno_code, q3_diff_prop, q2_diff_prop, q1_diff_prop)
+
+tertile_trend_melted <- melt(tertile_trend_examples, id.vars = "pheno_code")
+
+# Create a line plot
+tertile_trend_plot <- ggplot(tertile_trend_melted, aes(x = variable, y = value, group = pheno_code, color = pheno_code)) +
+  geom_line() +
+  geom_point() +
+  labs(x = "Tertile", y = "Significantly different PRS means (%)", color = "Phenotype") +
+  scale_x_discrete(labels = c("T3", "T2", "T1")) +
+  theme_minimal() +
+  theme(
+    text = element_text(family = "Arial", size = 12)
+  )
+
+# Save
+ggsave(filename = "tertile_trend_plot.png", tertile_trend_plot, path = "/figures/quantile_filtering/", width = 16, height = 9.4, units = "cm", dpi = 600, device = "png")
+```
+
+
+
+### Control vs FST-filtered PRS
+
+The following conducts Tukey's HSD tests for the control and FST-filtered (tertile 3 excluded) PRS subsets. The results are represented as heatmaps in the first subsection, then as a barplots comparing the difference in number of statistically significant pairwise comparisons (i.e. overlap between ancestries).
+
+P-values were first obtained for each ancestral pair across all phenotypes for the control and FST-filtered subsets.
+
+Control p-values (generated earlier but available here if doing separate analysis):
+
+```{r}
+# First turn off scientific notation to aid with analysis of small p values
+options(scipen = 999)
+
+# Specify subset
+subset <- "control"
+
+pops <- c("AFR", "AMR", "EAS", "EUR", "SAS", "OCE")
+
+tukey_results <- list()
+
+for (i in seq_along(prs_results$pheno_code)) {
+  pheno_code <- prs_results$pheno_code[i]
+  ## Generate combined data frame storing all population PRS data
+  total_score <- data.frame()
+  setwd(sprintf("/PRS/%s/%s/", pheno_code, subset))
+  
+  for (pop in pops) {
+    file_path <- sprintf("PRS_%s_%s_UKB_control_p0.0001.profile", pop, pheno_code)
+    data <- read_table(file_path, col_names = TRUE) %>% mutate(POP = pop)
+    data$SCORE <- as.numeric(data$SCORE)
+    total_score <- bind_rows(total_score, data)
+  }
+  
+  ## Standardise PRS
+  total_score <- mutate(total_score, SCORE = scale(SCORE))
+  
+  ## ANOVA and Tukey's HSD
+  anova <- aov(SCORE ~ POP, data = total_score)
+  tukey <- TukeyHSD(anova)
+  
+  ## Extract p-values from Tukey output as separate matrix, with pairwise comparisons as separate columns
+  tukey_df <- as.data.frame(tukey$POP)
+  tukey_df <- select(tukey_df, `p adj`)
+  tukey_df <- t(tukey_df)
+  rownames(tukey_df) <- NULL
+  
+  ## Add pheno_code as column
+  phenotype_code <- rep(pheno_code, nrow(tukey_df))
+  tukey_df <- cbind(tukey_df, phenotype_code)
+  
+  tukey_results[[pheno_code]] <- tukey_df
+}
+  
+combined_tukey_df_control <- do.call(rbind, tukey_results)
+combined_tukey_df_control <- as.data.frame(combined_tukey_df_control)
+
+# Save
+write_delim(combined_tukey_df_control, "/PRS/tukey_results_control.txt", delim = "\t", col_names = T)
+
+# Return scientific notation if needed
+options(scipen = 0)
+```
+
+
+FST-filtered p-values: 
+
+```{r}
+# First turn off scientific notation to aid with analysis of small p values
+options(scipen = 999)
+
+# Specify subset
+subset <- "q3_excluded"
+
+pops <- c("AFR", "AMR", "EAS", "EUR", "SAS", "OCE")
+
+tukey_results <- list()
+
+for (i in seq_along(prs_results$pheno_code)) {
+  pheno_code <- prs_results$pheno_code[i]
+  ## Generate combined data frame storing all population PRS data
+  total_score <- data.frame()
+  setwd(sprintf("/PRS/%s/%s/", pheno_code, subset))
+  
+  for (pop in pops) {
+    file_path <- sprintf("PRS_%s_%s_UKB_q3_excluded_p0.0001.profile", pop, pheno_code)
+    data <- read_table(file_path, col_names = TRUE) %>% mutate(POP = pop)
+    total_score <- bind_rows(total_score, data)
+  }
+  
+  ## Standardise PRS
+  total_score <- mutate(total_score, SCORE = scale(SCORE))
+  
+  ## ANOVA and Tukey's HSD
+  anova <- aov(SCORE ~ POP, data = total_score)
+  tukey <- TukeyHSD(anova)
+  
+  ## Extract p-values from Tukey output as separate matrix, with pairwise comparisons as separate columns
+  tukey_df <- as.data.frame(tukey$POP)
+  tukey_df <- select(tukey_df, `p adj`)
+  tukey_df <- t(tukey_df)
+  rownames(tukey_df) <- NULL
+  
+  ## Add pheno_code as column
+  phenotype_code <- rep(pheno_code, nrow(tukey_df))
+  tukey_df <- cbind(tukey_df, phenotype_code)
+  
+  tukey_results[[pheno_code]] <- tukey_df
+}
+  
+combined_tukey_df_filtered <- do.call(rbind, tukey_results)
+combined_tukey_df_filtered <- as.data.frame(combined_tukey_df_filtered)
+
+# Save
+write_delim(combined_tukey_df_filtered, "/PRS/tukey_results_q3excluded.txt", delim = "\t", col_names = T)
+
+# Return scientific notation if needed
+options(scipen = 0)
+```
+
+
+
+#### Heatmaps
+
+Heat map for the control PRS set:
+
+```{r}
+# Reshape the data to long format
+combined_tukey_df_control_long <- combined_tukey_df_control %>%
+  pivot_longer(cols = -phenotype_code, names_to = "comparison", values_to = "p_value") %>%
+  mutate(significance = ifelse(p_value < 0.05, "Significant", "Not Significant"))
+
+# Create heatmap
+heatmap_control <- ggplot(data = combined_tukey_df_control_long) +
+  geom_tile(aes(x = phenotype_code, y = comparison, fill = significance),
+            colour = "white") +
+  scale_fill_manual(values = c("Significant" = "orange", "Not Significant" = "moccasin")) +
+  labs(title = "Tukey's HSD results between ancestral control PRS distributions",
+       x = "Phenotype Code",
+       y = "Population Pair",
+       fill = "P value") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        axis.title.y.left = element_text(margin = margin(r = 15, l = 10)),
+        plot.title = element_text(hjust = 0.5),
+  text = element_text(family = "Arial", size = 20))
+
+print(heatmap_control)
+
+ggsave(filename = "heatmap_control.png", heatmap_control, path = "/PRS/figures/boxplots_q3.excluded/", width = 30, height = 20, units = "cm", dpi = 600, device = "png")
+```
+
+
+Heatmap for the FST-filtered set:
+
+```{r}
+# Reshape the data to long format
+combined_tukey_df_filtered_long <- combined_tukey_df_filtered %>%
+  pivot_longer(cols = -phenotype_code, names_to = "comparison", values_to = "p_value") %>%
+  mutate(significance = ifelse(p_value < 0.05, "Significant", "Not Significant"))
+
+# Create heatmap
+heatmap_FSTfiltered <- ggplot(data = combined_tukey_df_filtered_long) +
+  geom_tile(aes(x = phenotype_code, y = comparison, fill = significance),
+            colour = "white") +
+  scale_fill_manual(values = c("Significant" = "orange", "Not Significant" = "moccasin")) +
+  labs(title = "Tukey's HSD results between ancestral FST-filtered PRS distributions",
+       x = "Phenotype Code",
+       y = "Population Pair",
+       fill = "P value") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        axis.title.y.left = element_text(margin = margin(r = 15, l = 10)),
+        plot.title = element_text(hjust = 0.5),
+  text = element_text(family = "Arial", size = 20))
+
+print(heatmap_FSTfiltered)
+
+ggsave(filename = "heatmap_filtered.png", heatmap_FSTfiltered, path = "/PRS/figures/boxplots_q3.excluded/", width = 30, height = 20, units = "cm", dpi = 600, device = "png")
+```
+
+
+To view which pairwise comparisons were statistically significant for a given phenotype:
+
+```{r}
+# For the control:
+combined_tukey_df_control %>% filter(phenotype_code == "T2D") %>% select(where(~ . < 0.05))
+
+# For filtered set:
+combined_tukey_df_filtered %>% filter(phenotype_code == "T2D") %>% select(where(~ . < 0.05))
+```
+
+
+
+#### Barplot: ancestral overlap in control vs FST-filtered PRS
+
+
+```{r}
+# For the control:
+tukey_control_sum <- NULL
+
+for (pheno_code in (combined_tukey_df_control$phenotype_code)) {
+  sig_pairs_control <- combined_tukey_df_control %>% 
+    filter(phenotype_code == pheno_code) %>% 
+    select(where(~ . < 0.05))
+  
+  n <- ncol(sig_pairs_control)
+  
+  tukey_control_sum <- rbind(tukey_control_sum, data.frame(pheno_code = pheno_code, sig_pairs_control = n))
+}
+
+
+# FST-filtered set
+tukey_filtered_sum <- NULL
+
+for (pheno_code in (combined_tukey_df_filtered$phenotype_code)) {
+  sig_pairs_filtered <- combined_tukey_df_filtered %>% 
+    filter(phenotype_code == pheno_code) %>% 
+    select(where(~ . < 0.05))
+  
+  n <- ncol(sig_pairs_filtered)
+  
+  tukey_filtered_sum <- rbind(tukey_filtered_sum, data.frame(pheno_code = pheno_code, sig_pairs_filtered = n))
+}
+
+
+# Calculate difference between control and filtered sets
+combined <- inner_join(tukey_control_sum, tukey_filtered_sum, by = "pheno_code")
+combined <- mutate(combined, difference = sig_pairs_filtered - sig_pairs_control)
+
+
+# Plot
+sig_pairs_diff <- ggplot(combined, aes(x = pheno_code, y = difference, fill = factor(sign(difference)))) +
+  geom_col(show.legend = F) +
+  scale_fill_manual(values = c("darkturquoise", "white", "darkorange")) +
+  labs(title = "Difference in no. of Statistically Significant PRS Pairwise Comparisons between Control vs FST-Filtered Sets",
+       x = "Phenotype Code",
+       y = "Change in no. of significantly different pairs") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size = 10, hjust = 0.5),
+        axis.title.y.left = element_text(margin = margin(r = 10)),
+        text = element_text(family = "Arial", size = 15))
+
+sig_pairs_diff
+
+ggsave(filename = "diff_in_sig_pairs.png", sig_pairs_diff, path = "/figures/boxplots_q3.excluded/", width = 22, height = 15.5, units = "cm", dpi = 600, device = "png")
+```
+
+
+
+## Index SNP analysis
+
+Index SNPs were compared between the control and FST-filtered PRS subsets to determine potential loss of biological information. Specifically:
+-   Were the same index SNPs retained following FST-filtration?
+-   If not, were the new index SNPs taken from the same clump?
+
+Findings are summarised in the subsection "Key statistics".
+
+Note that this analysis only applies to the LD clumping patterns identified in the EUR cohort, as this was what the PRS were based off. 
+
+
+### 1. How many index SNPs were available for PRS in the control vs filtered subsets?
+
+```{r}
+number_of_index <- NULL
+
+for (pheno_code in prs_results$pheno_code) {
+
+# Control index SNPs
+index_control <- read_table(file.path("/PRS", pheno_code, "control/EUR_LD_p0.0001.clumped"), col_names = T)
+
+# FST-filtered index SNPs
+index_filtered <- read_table(file.path("/PRS", pheno_code, "q3_excluded/EUR_LD_p0.0001.clumped"), col_names = T)
+
+# Comparison of number of clumps
+clump_comparison <- (nrow(index_filtered)/nrow(index_control))*100
+
+# Combine info
+pheno_row <- data.frame(pheno_code, clump_comparison)
+
+number_of_index <- rbind(number_of_index, pheno_row)
+}
+
+summary(number_of_index$clump_comparison)
+sd(number_of_index$clump_comparison)
+```
+
+The number of index SNPs available to a phenotype ranges from 74.7-81.4% of the original following FST filtration. The mean is 78.8%.
+
+
+Represented as a barplot:
+
+```{r}
+plot_index_number <- ggplot(number_of_index, aes(x = pheno_code, y = clump_comparison)) +
+  geom_bar(stat = "identity", fill = "#56B4E9") +
+  ylim(0, 100) +
+  labs(
+    title = " ",
+    x = "Phenotype Code",
+    y = "Filtered index SNP set size (% of control)"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+  text = element_text(family = "Arial", size = 12))
+
+plot_index_number
+
+ggsave(filename = "number_of_indexSNPs.png", plot_index_number, path = "/figures/indexSNP_analysis/", width = 16, height = 9.4, units = "cm", dpi = 600, device = "png")
+```
+
+
+
+### 2. Are the same index SNPs retained?
+
+```{r}
+same_index_check <- NULL
+
+for (pheno_code in prs_results$pheno_code) {
+
+# Control index SNPs
+index_control <- read_table(file.path("/PRS", pheno_code, "control/EUR_LD_p0.0001.clumped"), col_names = T)
+
+# FST-filtered index SNPs
+index_filtered <- read_table(file.path("/PRS", pheno_code, "q3_excluded/EUR_LD_p0.0001.clumped"), col_names = T)
+
+# How many of the original index SNPs are retained?
+shared_index <- inner_join(index_control, index_filtered, by = c("CHR", "SNP", "BP"))
+
+  shared_index_prop <- (nrow(shared_index)/nrow(index_control))*100
+
+# Combine info
+pheno_row <- data.frame(pheno_code, shared_index_prop)
+
+same_index_check <- rbind(same_index_check, pheno_row)
+}
+
+summary(same_index_check$shared_index_prop)
+sd(same_index_check$shared_index_prop)
+```
+
+
+### 3. For variants that were index SNPs only in the filtered subset, were they derived from the same clumps as the control index SNPs?
+
+Yes, all were derived from clumps surrounding control index SNPs across all phenotypes (as expected). 
+
+```{r}
+clump_check <- NULL
+  
+for (pheno_code in prs_results$pheno_code) {
+
+# Control index SNPs
+index_control <- read_table(file.path("/PRS", pheno_code, "control/EUR_LD_p0.0001.clumped"), col_names = T)
+
+# FST-filtered index SNPs
+index_filtered <- read_table(file.path("/PRS", pheno_code, "q3_excluded/EUR_LD_p0.0001.clumped"), col_names = T)
+
+# Split table to get clumped SNPs
+clumps_control <- separate_rows(index_control, SP2, sep = ",")
+clumps_control$SP2 <- gsub("\\(1\\)", "", clumps_control$SP2)
+
+# Extract FST-filtered index SNPs not shared
+filtered_only_index <- anti_join(index_filtered, index_control, by = c("CHR", "SNP", "BP"))
+
+# Determine whether new index SNP was found in a clump of the control index SNPs
+same_clumps <- filter(filtered_only_index, SNP %in% clumps_control$SP2)
+## This just says whether the new SNPs were in any clump from the control 
+
+  ## % of index SNPs from filtered subset that were clumped with an index SNP in the control subset
+  same_clumps_prop <- (nrow(same_clumps)/nrow(filtered_only_index))*100
+
+# Combine info
+  pheno_row <- data.frame(pheno_code, same_clumps_prop)
+  
+  clump_check <- rbind(clump_check, pheno_row)
+  }
+```
+
+
+### 4. For the control index SNPs that were no longer index following filtration, did they recieve at least one replacement from the same clump?
+
+```{r}
+replacement_analysis <- NULL
+
+for (pheno_code in prs_results$pheno_code) {
+
+# Control index SNPs
+index_control <- read_table(file.path("/PRS", pheno_code, "control/EUR_LD_p0.0001.clumped"), col_names = T)
+
+# FST-filtered index SNPs
+index_filtered <- read_table(file.path("/PRS", pheno_code, "q3_excluded/EUR_LD_p0.0001.clumped"), col_names = T)
+
+# Split table to get clumped SNPs
+clumps_control <- separate_rows(index_control, SP2, sep = ",")
+clumps_control$SP2 <- gsub("\\(1\\)", "", clumps_control$SP2)
+
+# Filter control for index SNPs that were no longer index in the filtered set
+clumps_control_removed <- filter(clumps_control, !SNP %in% index_filtered$SNP)
+
+# Add a "1" next to the clump (SP2) SNPs that became index SNPs in the filtered set
+  ## First add a new column with all values set to 0
+  clumps_control_removed <- clumps_control_removed %>%
+  mutate(index_in_filtered = 0)
+  
+  ## Then mark the new index SNPs
+  for (snp in index_filtered$SNP) {
+  clumps_control_removed <- clumps_control_removed %>%
+    mutate(index_in_filtered = ifelse(SP2 == snp, 1, index_in_filtered))
+  }
+  
+# Find how many removed index SNPs got replaced by another in the same clump
+results <- clumps_control_removed %>%
+  group_by(SNP) %>%
+  summarise(sum_index_in_filtered = sum(index_in_filtered))
+
+  ## As a proportion of the overall control index SNPs
+  prop_replaced_overall <- (sum(results$sum_index_in_filtered != 0) / nrow(index_control))*100
+
+# How many SNPs received multiple replacements from the same clump?
+multiple_replacements <- filter(results, sum_index_in_filtered > 1)
+
+prop_multi_replacement_overall <- (nrow(multiple_replacements) / nrow(index_control))*100
+
+# Combine data
+pheno_row <- data.frame(pheno_code, prop_replaced_overall, prop_multi_replacement_overall)
+
+replacement_analysis <- rbind(replacement_analysis, pheno_row)
+}
+```
+
+
+### Key statistics
+
+The above information was combined into a single table:
+
+```{r}
+# Add replacement data
+index_retention_means <- replacement_analysis %>%
+  mutate(single_replacement = prop_replaced_overall - prop_multi_replacement_overall) %>%
+  rename(multiple_replacements = prop_multi_replacement_overall) %>%
+  select(-prop_replaced_overall)
+  
+# Merge with retention data
+index_retention_means <- inner_join(index_retention_means, same_index_check, by = "pheno_code")
+
+# Calculate proportion of index SNP loss
+index_retention_means <- mutate(index_retention_means, lost = 100 - (multiple_replacements + single_replacement + shared_index_prop))   
+
+# Save
+write_delim(index_retention_means, "/PRS/index_retention_means.txt", delim = "\t", col_names = T)  
+```
+
+
+Visualised as a barplot:
+
+```{r}
+# Rename columns
+index_retention_means <- rename(index_retention_means,
+                                         "Retained" = shared_index_prop,
+                                         "Single replacement" = single_replacement,
+                                         "Multiple replacements" = multiple_replacements,
+                                         "Lost with no replacement" = lost)
+
+index_retention_means_reshaped <- index_retention_means %>%
+  gather(category, proportion, -pheno_code)
+
+# Define order
+order_levels <- c("Lost with no replacement", "Multiple replacements", "Single replacement", "Retained")
+index_retention_means_reshaped$category <- factor(index_retention_means_reshaped$category, levels = order_levels)
+
+# Create the rearranged stacked bar plot with custom legend labels
+index_retention_plot <- ggplot(index_retention_means_reshaped, aes(x = pheno_code, y = proportion, fill = category)) +
+  geom_bar(stat = "identity") +
+  labs(x = "Phenotype Code", y = "Proportion of control index SNPs (%)") +
+  scale_fill_manual(values = c("Retained" = "#56B4E9", "Single replacement" = "#E69F00", "Multiple replacements" = "#F0E442", "Lost with no replacement" = "#D55E00")) +
+  theme_minimal() +
+  theme(legend.title = element_blank(),
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        text = element_text(family = "Arial", size = 14))
+
+ggsave(filename = "index_retention_plot.png", index_retention_plot, path = "/PRS/figures/indexSNP_analysis/", width = 22, height = 12, units = "cm", dpi = 600, device = "png")
+```
+
+
+The following statistics summarise the findings on changes in index SNP patterns:
+
+```{r}
+# Mean proportion of control index SNPs retained = 65.3%
+summary(index_retention_means$shared_index_prop)
+sd(index_retention_means$shared_index_prop)
+
+# Mean proportion of lost index SNPs that received one replacement = 11.4%
+summary(index_retention_means$single_replacement)
+sd(index_retention_means$single_replacement)
+
+# Mean proportion of lost index SNPs that received multiple replacements = 1.0%
+summary(index_retention_means$multiple_replacements)
+sd(index_retention_means$multiple_replacements)
+
+# Mean proportion of index SNPs lost with no replacement = 22.4%
+summary(index_retention_means$lost)
+sd(index_retention_means$lost)
+```
+
+
+
+## FST vs effect size of all SNPs
+
+The following code calculates Spearman's correlation between FST and effect size for the UKB (control) summary statistic SNPs.
+
+```{r}
+nrows <- length(prs_results$pheno_code)
+
+# Set up the data frame
+corr_combined_fst_beta <- data.frame(
+  pheno_code = character(nrows),
+  rho = numeric(nrows),
+  p_value = numeric(length(nrows))
+)
+
+# Load FST estimates
+fst_allSNPs <- read_delim("/FST/FST_1kGP_SNPs.fst", col_names = TRUE)
+
+# Loop through the pheno_code values
+for (i in 1:nrows) {
+  pheno_code <- prs_results$pheno_code[i]
+
+  # Load relevant summary statistic (control)
+  sumstat <- read_delim(sprintf("/summary_statistics/%s_UKB_QC_biallelicSNPs.txt", pheno_code))
+
+  # Merge with FST estimates
+  fst_sumstatSNPs <- inner_join(sumstat, fst_allSNPs, by = "SNP")
+
+  # Calculate Spearman's correlation
+  corr_fst_beta <- cor.test(fst_sumstatSNPs$beta, fst_sumstatSNPs$FST, method = "pearson")
+
+  # Store results in the corresponding row of the data frame
+  corr_combined_fst_beta[i, "pheno_code"] <- pheno_code
+  corr_combined_fst_beta[i, "rho"] <- corr_fst_beta$estimate
+  corr_combined_fst_beta[i, "p_value"] <- as.numeric(corr_fst_beta$p.value)
+}
+
+write_delim(corr_combined_fst_beta, "/PRS/pearson_corr_fst_vs_beta.txt", delim = "\t", col_names = T)
+```
+
+
+Summary of findings:
+```{r}
+mean(corr_combined_fst_beta$rho)
+range(corr_combined_fst_beta$rho)
+
+# Correlations that weren't significant
+corr_combined_fst_beta %>% subset(p_value >= 0.05)
+```
+
+
+Scatterplot:
+
+```{r}
+# Filter for statistically significant correlations
+corr_combined_fst_beta <- corr_combined_fst_beta %>% filter(p_value < 0.05)
+
+# Plot
+fst_effectSize_dotplot <- ggplot(corr_combined_fst_beta, aes(x = pheno_code, y = rho)) +
+  geom_point(size = 2, colour = "deepskyblue") +
+  labs(title = " ",
+       x = "Phenotype Code",
+       y = "Correlation between FST and effect size") +
+  ylim(-0.0065, 0.0065) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        text = element_text(family = "Arial", size = 12))
+
+ggsave(filename = "fst_effectSize_dotplot.png", fst_effectSize_dotplot, path = "/PRS/figures/indexSNP_analysis/", width = 16, height = 9.4, units = "cm", dpi = 600, device = "png")
+```
+
+
+
+### What was the effect size and FST of the index SNPs that were removed with no replacement?
+
+The following code plots effect size vs FST for the control index SNPs and highlights those that were not retained or replaced. A horizontal line was added to indicate the FST-filtration threshold. This process is performed for all phenotypes.
+
+```{r}
+# Load FST values if not already done
+fst_allSNPs <- read_delim("/FST/FST_1kGP_SNPs.fst", col_names = TRUE)
+
+for (pheno_code in prs_results$pheno_code) {
+  
+# Load control summary statistic file to extract effect sizes (created in control_UKBsumstat_prep)
+  sumstat <- read_delim(sprintf("/summary_statistics/%s_UKB_QC_biallelicSNPs.txt", pheno_code))
+  
+# Load control index SNPs
+  index_control <- read_table(file.path("/PRS", pheno_code, "control/EUR_LD_p0.0001.clumped"), col_names = T)
+
+# FST-filtered index SNPs
+  index_filtered <- read_table(file.path("/PRS", pheno_code, "q3_excluded/EUR_LD_p0.0001.clumped"), col_names = T)
+
+# Split control table to get clumped SNPs
+  clumps_control <- separate_rows(index_control, SP2, sep = ",")
+  clumps_control$SP2 <- gsub("\\(1\\)", "", clumps_control$SP2)
+
+# Filter control for index SNPs that were no longer index in the filtered set
+  clumps_control_removed <- filter(clumps_control, !SNP %in% index_filtered$SNP)
+
+# Add a "1" next to the SP2 SNPs that became index SNPs in the filtered set
+  ## First add a new column with all values set to 0
+  clumps_control_removed <- clumps_control_removed %>%
+  mutate(index_in_filtered = 0)
+  
+  ## Then mark the new index SNPs
+  for (snp in index_filtered$SNP) {
+  clumps_control_removed <- clumps_control_removed %>%
+    mutate(index_in_filtered = ifelse(SP2 == snp, 1, index_in_filtered))
+}
+  
+  # Find how many removed index SNPs got replaced by another in the same clump
+  results <- clumps_control_removed %>%
+  group_by(SNP) %>%
+  summarise(sum_index_in_filtered = sum(index_in_filtered))
+
+  # Effect size and FST for all control index SNPs
+  fst_beta_control_index <- inner_join(index_control, sumstat, by = "SNP")
+  fst_beta_control_index <- inner_join(fst_beta_control_index, fst_allSNPs, by = "SNP")
+  fst_beta_control_index <- select(fst_beta_control_index, CHR.x, BP.x, SNP, beta, FST)
+
+  # Identify subset of lost index SNPs with no replacement
+  not_replaced <- filter(results, sum_index_in_filtered == 0)
+  not_replaced <- filter(fst_beta_control_index, SNP %in% not_replaced$SNP)
+
+# Plot
+scatterplot <- ggplot(fst_beta_control_index, aes(x = beta, y = FST, colour = !SNP %in% not_replaced$SNP)) +
+  geom_point(size = 1, alpha = 0.5) +
+  scale_colour_manual(values = c("FALSE" = "darkorange1", "TRUE" = "deepskyblue")) +
+  labs(title = pheno_code, x = "Effect Size", y = "FST", colour = "Retained or replaced") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 12, family = "Arial", face = "bold", hjust = 0.5),
+        axis.text.x.bottom = element_text(size = 11),
+        axis.text.y.left = element_text(size = 11),
+        axis.title.x = element_text(colour = "white"),
+        axis.title.y = element_text(colour = "white")) +
+  geom_hline(yintercept = 0.0850261, colour = "red") +
+  guides(colour = "none")
+
+# Save
+ggsave(filename = paste0(pheno_code, "_indexSNP_plot.png"), scatterplot, path = "/figures/indexSNP_analysis/", width = 8, height = 8.15, units = "cm", dpi = 600, device = "png")
+}
+```
+
+
+
+### Did tertiles 1 and 3 differ in mean effect sizes?
+
+For one phenotype:
+```{r}
+pheno_code <- "BMI"
+
+# Load summary statistics
+sumstat <- read_delim(sprintf("/summary_statistics/%s_UKB_QC_biallelicSNPs.txt", pheno_code))
+
+# Load index SNPs for T3 and T1
+t1_index <- read_table(sprintf("/PRS/%s/q1/EUR_LD_p0.0001.clumped", pheno_code))
+t1_index <- select(t1_index, SNP)
+
+t3_index <- read_table(sprintf("/PRS/%s/q3/EUR_LD_p0.0001.clumped", pheno_code))
+t3_index <- select(t3_index, SNP)
+
+# Obtain mean effect sizes for each tertile
+t1_effect_sizes <- filter(sumstat, SNP %in% t1_index$SNP)
+t3_effect_sizes <- filter(sumstat, SNP %in% t3_index$SNP)
+
+# Two-sample t-test for comparison
+t_test <- t.test(t1_effect_sizes$beta, t3_effect_sizes$beta)
+p_val <- t_test$p.value
+```
+
+
+All phenotypes:
+```{r}
+effect_diff_t.test <- NULL
+
+for (i in seq_along(prs_results$phenotype)) {
+  pheno_code <- prs_results$pheno_code[i]
+  
+  # Load summary statistics
+sumstat <- read_delim(sprintf("/summary_statistics/%s_UKB_QC_biallelicSNPs.txt", pheno_code))
+
+# Load index SNPs for T3 and T1
+t1_index <- read_table(sprintf("/PRS/%s/q1/EUR_LD_p0.0001.clumped", pheno_code))
+t1_index <- select(t1_index, SNP)
+
+t3_index <- read_table(sprintf("/PRS/%s/q3/EUR_LD_p0.0001.clumped", pheno_code))
+t3_index <- select(t3_index, SNP)
+
+# Obtain mean effect sizes for each tertile
+t1_effect_sizes <- filter(sumstat, SNP %in% t1_index$SNP)
+t3_effect_sizes <- filter(sumstat, SNP %in% t3_index$SNP)
+
+# Two-sample t-test for comparison
+t_test <- t.test(t1_effect_sizes$beta, t3_effect_sizes$beta)
+p_val <- t_test$p.value
+  
+# Add to dataframe
+effect_diff_t.test <- rbind(effect_diff_t.test, data.frame(pheno_code = pheno_code, p_val = p_val))
+}
+
+effect_diff_t.test <- rename(effect_diff_t.test, t1_t3_effectSize_diff = p_val)
+write_delim(effect_diff_t.test, "/PRS/effect_diff_t.test.txt", delim = "\t", col_names = T)
+```
+
+
+Phenotypes where mean effect size differed between T1 and T3:
+
+```{r}
+filter(effect_diff_t.test, t1_t3_effectSize_diff < 0.05)
+```

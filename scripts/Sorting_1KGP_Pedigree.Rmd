@@ -1,0 +1,93 @@
+This notebook describes the subsetting of the 2504 unrelated 1kGP individuals and their sorting into five continental groups.
+
+
+# Packages and external files
+
+```{r}
+library(tidyverse)
+```
+
+
+The pedigree file was downloaded from ftp://ftp.1000genomes.ebi.ac.uk/vol1/ftp/technical/working/20130606_sample_info/20130606_g1k.ped and converted into csv format.
+
+```{r}
+pedigree <- read.csv("/metadata/1KGP_Sample_Info_sep.csv", na.strings = "")
+```
+
+
+
+# Retaining 2504 unrelated individuals
+
+There were originally 3500 samples contained in the pedigree file. To filter for unrelated individuals, a tab-delimited file containing the sample IDs of the 2504 unrelated individuals was downloaded from http://ftp.1000genomes.ebi.ac.uk/vol1/ftp/data_collections/1000G_2504_high_coverage/1000G_2504_high_coverage.sequence.index. Note that there is an extra step that changes the order of the samples to match their order in the 1kGP plink 1.9 files derived from the VCFs. 
+
+```{r}
+# Load file containing unrelated sample IDs
+unrelated_samples <- read_delim("/metadata/1KGP_unrelatedSamples_seq.index", delim = "\t", comment = "#", col_names = F)
+
+# Filter pedigree file to retain unrelated samples (ID names in column X15)
+unrelated_2504 <- pedigree %>% 
+  filter(sample %in% unrelated_samples$X15) %>%
+  select(IID = sample, FID = sample)
+
+# Match order of samples with that in the 1kGP plink files
+plink_order <- read_delim("1kGP_SNPs.fam", delim = "\t", col_names = F)
+plink_order <- select(plink_order, 2)
+
+unrelated_2504 <- inner_join(plink_order, unrelated_2504, by = c("X2" = "FID"))
+
+# Save 2504 subset
+write_delim(unrelated_2504, "/metadata/unrelated1kGP_2504.txt", delim = "\t", col_names = F)
+```
+
+
+
+# Sorting ancestral groups
+
+A vector of relevant subpopulation codes was used to extract relevant sample IDs belonging to each of the five 1kGP ancestral groups (AFR, AMR, EAS, EUR, SAS). Each resulting file contains two columns: sample ID (column 1) and subpopulation code (originally column 3).
+
+```{r}
+# Africa
+AFR <- c("ACB", "ASW", "ESN", "GWD", "LWK", "MSL", "YRI")
+AFR_samples <- subset(pedigree, population %in% AFR) %>% select(1, 3)
+write_delim(AFR_samples, "/1KGP_populations/AFR_samples.txt", delim = "\t", col_names = F)
+
+# The Americas
+AMR <- c("CLM", "MXL", "PEL", "PUR")
+AMR_samples <- subset(pedigree, population %in% AMR) %>% select(1, 3)
+write_delim(AMR_samples, "/1KGP_populations/AMR_samples.txt", delim = "\t", col_names = F)
+
+# East Asia
+EAS <- c("CDX", "CHB", "CHS", "KHV", "JPT")
+EAS_samples <- subset(pedigree, population %in% EAS) %>% select(1, 3)
+write_delim(EAS_samples, "/1KGP_populations/EAS_samples.txt", delim = "\t", col_names = F)
+
+# Europe
+EUR <- c("CEU", "FIN", "GBR", "IBS", "TSI")
+EUR_samples <- subset(pedigree, population %in% EUR) %>% select(1, 3)
+write_delim(EUR_samples, "/1KGP_populations/EUR_samples.txt", delim = "\t", col_names = F)
+
+# South Asia
+SAS <- c("BEB", "GIH", "ITU", "PJL", "STU")
+SAS_samples <- subset(pedigree, population %in% SAS) %>% select(1, 3)
+write_delim(SAS_samples, "/1KGP_populations/SAS_samples.txt", delim = "\t", col_names = F)
+```
+
+
+These were then used to sort the 2504 unrelated samples derived earlier into ancestral groups.
+
+```{r}
+AFR_unrelated <- subset(unrelated_2504, IID %in% AFR_samples$sample)
+write_delim(AFR_unrelated, "AFR_unrelatedSamples_2504subset.txt", delim = "\t", col_names = F)
+
+AMR_unrelated <- subset(unrelated_2504, IID %in% AMR_samples$sample)
+write_delim(AMR_unrelated, "AMR_unrelatedSamples_2504subset.txt", delim = "\t", col_names = F)
+
+EAS_unrelated <- subset(unrelated_2504, IID %in% EAS_samples$sample)
+write_delim(EAS_unrelated, "EAS_unrelatedSamples_2504subset.txt", delim = "\t", col_names = F)
+
+EUR_unrelated <- subset(unrelated_2504, IID %in% EUR_samples$sample)
+write_delim(EUR_unrelated, "EUR_unrelatedSamples_2504subset.txt", delim = "\t", col_names = F)
+
+SAS_unrelated <- subset(unrelated_2504, IID %in% SAS_samples$sample)
+write_delim(SAS_unrelated, "SAS_unrelatedSamples_2504subset.txt", delim = "\t", col_names = F)
+```

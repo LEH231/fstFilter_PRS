@@ -1,0 +1,1524 @@
+This notebook analyses the UKB PRS results from "PRS_ancestral_analysis.Rmd" on a subpopulation level.
+
+
+# Packages
+
+```{r}
+library(tidyverse)
+library(cowplot)
+```
+
+
+
+# FST-filtered subpopulation PRS
+
+
+## Subpopulation metadata table
+
+Subpopulation membership for the 1kGP populations was taken from files generated in the R notebook "Sorting_1KGP_Pedigree.Rmd", loaded below. The OCE file was derived from an existing NCIG metadata file.
+
+```{r}
+AFR_samples <- read_delim("/1KGP_populations/AFR_samples.txt", delim = "\t", col_names = c("IID", "subpop"))
+AMR_samples <- read_delim("/1KGP_populations/AMR_samples.txt", delim = "\t", col_names = c("IID", "subpop"))
+EUR_samples <- read_delim("/1KGP_populations/EUR_samples.txt", delim = "\t", col_names = c("IID", "subpop"))
+EAS_samples <- read_delim("/1KGP_populations/EAS_samples.txt", delim = "\t", col_names = c("IID", "subpop"))
+SAS_samples <- read_delim("/1KGP_populations/SAS_samples.txt", delim = "\t", col_names = c("IID", "subpop"))
+
+# For OCE
+OCE_samples <- read_delim("/ncig_communities.txt", delim = "\t", col_names = c("IID", "subpop"), skip = 1)
+OCE_samples <- OCE_samples %>%
+  mutate(subpop = ifelse(subpop %in% names(communities), communities[subpop], subpop))
+
+# Combine into subpopulation metadata table
+subpop_metadata <- rbind(AFR_samples, AMR_samples, EAS_samples, EUR_samples, SAS_samples, OCE_samples)
+
+# Save
+write_delim(subpop_metadata, "subpop_metadata.txt", delim = "\t", col_names = T)
+```
+
+
+
+## Specified phenotype
+
+The following code generates a single multi-panel figure for a given phenotype, here with hypertension as an example. 
+
+```{r}
+# Specify UKB phenotype code and name
+pheno_code <- "HT"
+phenotype <- "Hypertension"
+p_val <- "p0.0001"
+
+# Set working directory
+setwd(sprintf("/PRS/%s/q3_excluded/", pheno_code))
+
+# Load and visualise PRS
+pops <- c("AFR", "AMR", "EAS", "EUR", "SAS", "OCE")
+total_score <- data_frame() 
+
+for (pop in pops) {
+  file_path <- sprintf("PRS_%s_%s_UKB_q3_excluded_%s.profile", pop, pheno_code, p_val)
+  data <- read_table(file_path, col_names = TRUE) %>% mutate(POP = pop)
+  total_score <- bind_rows(total_score, data)
+}
+
+# Standardise
+total_score <- mutate(total_score, SCORE = scale(SCORE))
+
+# Identify subpopulations
+total_score <- inner_join(total_score, subpop_metadata, by = "IID")
+
+# Split polygenic risk scores according to ancestry
+pop_sep <- split(total_score, total_score$POP)
+
+# Define color palettes for each ancestry
+palettes <- c(AFR = "Reds", AMR = "YlGn", EAS = "Purples", 
+              EUR = "Blues", OCE = "BuGn", SAS = "YlOrBr")
+
+# Generate plots
+plots <- list()
+
+for (pop in names(pop_sep)) {
+  population_data <- pop_sep[[pop]]
+  
+  PRS <- ggplot(population_data, aes(x = subpop, y = SCORE, fill = subpop)) +
+    geom_boxplot() +
+    scale_y_continuous(name = "Polygenic Risk Score", limits = c(-5, 5)) +
+    theme_light() +
+    scale_fill_brewer(palette = palettes[pop]) +
+    labs(x = NULL,
+         y = NULL) +
+    theme(text = element_text(family = "Arial", size = 14),
+          axis.title.x = element_blank(), 
+          axis.title.y = element_blank(),
+          strip.text = element_text(color = "black")) +
+    facet_wrap(~ POP, ncol = 1, scales = "free_y", labeller = labeller(POP = label_value)) +
+    guides(fill = "none")
+  
+  plots[[pop]] <- PRS
+}
+
+combined_plot <- plot_grid(plotlist = plots, ncol = 2, align = "hv",
+                            axis = "tblr")
+
+combined_plot <- ggdraw(combined_plot) +
+  draw_label("Subpopulation", x = 0.5, y = -0.02, size = 14, fontfamily = "Arial") +
+  draw_label("Polygenic Risk Score", angle = 90, x = -0.02, y = 0.5, size = 14, fontfamily = "Arial") +
+  draw_label(phenotype, x = 0.5, y = 1.02, size = 14, fontface = "bold", fontfamily = "Arial") +
+  theme(axis.title = element_text(hjust = 0.5, margin = margin(b = 18)),
+        axis.title.y.left = element_text(margin = margin(r = 15)),
+        axis.text.x.bottom = element_text(margin = margin(t = 20)),
+        plot.margin = margin(t = 20, l = 20, b = 20, r = 10))
+
+combined_plot
+
+# Save 
+ggsave(filename = paste0(pheno_code, "_subpopPRS.png"), combined_plot, path = "/figures/subpop_analysis/", width = 20, height = 22, units = "cm", dpi = 600, device = "png")
+```
+
+
+
+## All phenotypes
+
+The following generates subpopulation PRS for all UKB phenotypes analysed, which are listed in the metadata table loaded in below.
+
+```{r}
+# Load metadata table
+metadata <- read_delim("UKB_referenceTable.txt", delim = "\t", col_names = T)
+
+# Loop through each phenotype
+for (i in seq_along(metadata$phenotype)) {
+  pheno_code <- metadata$phenotype_code[i]
+  phenotype <- metadata$phenotype[i]
+  p_val <- "p0.0001"
+  
+# Set working directory
+setwd(sprintf("/PRS/%s/q3_excluded/", pheno_code))
+
+# Load PRS data
+pops <- c("AFR", "AMR", "EAS", "EUR", "SAS", "OCE")
+total_score <- data_frame() 
+
+for (pop in pops) {
+  file_path <- sprintf("PRS_%s_%s_UKB_q3_excluded_%s.profile", pop, pheno_code, p_val)
+  data <- read_table(file_path, col_names = TRUE) %>% mutate(POP = pop)
+  total_score <- bind_rows(total_score, data)
+}
+
+# Standardise
+total_score <- mutate(total_score, SCORE = scale(SCORE))
+
+# Identify subpopulations
+total_score <- inner_join(total_score, subpop_metadata, by = "IID")
+
+# Split polygenic risk scores according to ancestry
+pop_sep <- split(total_score, total_score$POP)
+
+# Define color palettes for each ancestry
+palettes <- c(AFR = "Reds", AMR = "YlGn", EAS = "Purples", 
+              EUR = "Blues", OCE = "BuGn", SAS = "YlOrBr")
+
+# Generate plots
+plots <- list()
+
+for (pop in names(pop_sep)) {
+  population_data <- pop_sep[[pop]]
+  
+  PRS <- ggplot(population_data, aes(x = subpop, y = SCORE, fill = subpop)) +
+    geom_boxplot() +
+    scale_y_continuous(name = "Polygenic Risk Score", limits = c(-5, 5)) +
+    theme_light() +
+    scale_fill_brewer(palette = palettes[pop]) +
+    labs(x = NULL,
+         y = NULL) +
+    theme(text = element_text(family = "Arial", size = 14),
+          axis.title.x = element_blank(), 
+          axis.title.y = element_blank(),
+          strip.text = element_text(color = "black")) +
+    facet_wrap(~ POP, ncol = 1, scales = "free_y", labeller = labeller(POP = label_value)) +
+    guides(fill = "none")
+  
+  plots[[pop]] <- PRS
+}
+
+combined_plot <- plot_grid(plotlist = plots, ncol = 2, align = "hv",
+                            axis = "tblr")
+
+combined_plot <- ggdraw(combined_plot) +
+  draw_label("Subpopulation", x = 0.5, y = -0.02, size = 14, fontfamily = "Arial") +
+  draw_label("Polygenic Risk Score", angle = 90, x = -0.02, y = 0.5, size = 14, fontfamily = "Arial") +
+  draw_label(phenotype, x = 0.5, y = 1.02, size = 14, fontface = "bold", fontfamily = "Arial") +
+  theme(axis.title = element_text(hjust = 0.5, margin = margin(b = 18)),
+        axis.title.y.left = element_text(margin = margin(r = 15)),
+        axis.text.x.bottom = element_text(margin = margin(t = 20)),
+        plot.margin = margin(t = 20, l = 20, b = 20, r = 10))
+
+# Save
+ggsave(filename = paste0(pheno_code, "_subpopPRS.png"), combined_plot, path = "/figures/subpop_analysis/", width = 20, height = 22, units = "cm", dpi = 600, device = "png")
+}
+```
+
+
+
+## GBR vs others
+
+The code below generates the same figures as above but with the GBR (British) subpopulation PRS placed in each ancestry's panel for comparison.
+
+
+### One phenotype
+
+```{r}
+# Specify UKB phenotype code and name
+pheno_code <- "HT"
+phenotype <- "Hypertension"
+p_val <- "p0.0001"
+
+# Set working directory
+setwd(sprintf("/PRS/%s/q3_excluded/", pheno_code))
+
+# Load and visualise PRS
+pops <- c("AFR", "AMR", "EAS", "EUR", "SAS", "OCE")
+total_score <- data_frame() 
+
+for (pop in pops) {
+  file_path <- sprintf("PRS_%s_%s_UKB_q3_excluded_%s.profile", pop, pheno_code, p_val)
+  data <- read_table(file_path, col_names = TRUE) %>% mutate(POP = pop)
+  total_score <- bind_rows(total_score, data)
+}
+
+# Standardise
+total_score <- mutate(total_score, SCORE = scale(SCORE))
+
+# Identify subpopulations
+total_score <- inner_join(total_score, subpop_metadata, by = "IID")
+
+# Split polygenic risk scores according to ancestry
+pop_sep <- split(total_score, total_score$POP)
+
+# Add GBR to each for comparison
+GBR <- subset(total_score, subpop == "GBR")
+
+for (pop in pops) {
+
+  if (pop != "EUR"){
+pop_sep[[pop]] <- rbind(GBR, pop_sep[[pop]])
+  }
+}
+
+# Generate plots
+plots <- list()
+
+## Define colour for each subpopulation
+colours_subpop <- c(ACB = "#FEE5D9", ASW = "#FCBBA1", ESN = "#FC9272", GWD = "#FB6A4A", LWK = "#EF3B2C", MSL = "#CB181D", YRI = "#99000D", CLM = "#FFFFCC", MXL = "#C2E699", PEL = "#78C679", PUR = "#238443", CDX = "#F2F0F7", CHB = "#CBC9E2", CHS = "#9E9AC8", JPT = "#756BB1", KHV = "#54278F", CEU ="#EFF3FF", FIN = "#BDD7E7", GBR = "#6BAED6", IBS = "#3182BD", TSI = "#08519C",NCIGP2 = "#EDF8FB", NCIGP3 = "#B2E2E2", NCIGP1 = "#66C2A4", NCIGP4 = "#238B45", BEB = "#FFFFD4", GIH = "#FED98E", ITU = "#FE9929", PJL = "#D95F0E", STU = "#993404")
+
+## Plot
+for (pop in names(pop_sep)) {
+  population_data <- pop_sep[[pop]]
+  
+  PRS <- ggplot(population_data, aes(x = fct_relevel(subpop, "GBR"), y = SCORE, fill = subpop)) +
+    geom_boxplot() +
+    scale_y_continuous(name = "Polygenic Risk Score", limits = c(-5, 5)) +
+    scale_fill_manual(values = colours_subpop) +
+    theme_light() +
+    labs(title = pop,
+         x = NULL,
+         y = NULL) +
+    theme(text = element_text(family = "Arial", size = 14),
+          plot.title = element_text(hjust = 0.5, face = "bold", size = 13),
+          axis.title.x = element_blank(), 
+          axis.title.y = element_blank(),
+          plot.margin = margin(b = 20, l = 15)) +
+    guides(fill = "none")
+  
+
+  plots[[pop]] <- PRS
+}
+
+combined_plot <- plot_grid(plotlist = plots, ncol = 2, align = "hv",
+                            axis = "tblr")
+
+combined_plot <- ggdraw(combined_plot) +
+  draw_label("Subpopulation", x = 0.5, y = -0.02, size = 14, fontfamily = "Arial") +
+  draw_label("Polygenic Risk Score", angle = 90, x = -0.02, y = 0.5, size = 14, fontfamily = "Arial") +
+  draw_label(phenotype, x = 0.5, y = 1.02, size = 14, fontface = "bold", fontfamily = "Arial") +
+  theme(axis.title = element_text(hjust = 0.5, margin = margin(b = 18)),
+        axis.title.y.left = element_text(margin = margin(r = 15)),
+        axis.text.x.bottom = element_text(margin = margin(t = 20)),
+        plot.margin = margin(t = 20, l = 25, b = 20, r = 10))
+
+combined_plot
+```
+
+
+### All phenotypes
+
+```{r}
+for (i in seq_along(metadata$phenotype)) {
+  pheno_code <- metadata$phenotype_code[i]
+  phenotype <- metadata$phenotype[i]
+  p_val <- "p0.0001"
+  
+# Set working directory
+setwd(sprintf("/PRS/%s/q3_excluded/", pheno_code))
+
+# Load and visualise PRS
+pops <- c("AFR", "AMR", "EAS", "EUR", "SAS", "OCE")
+total_score <- data_frame() 
+
+for (pop in pops) {
+  file_path <- sprintf("PRS_%s_%s_UKB_q3_excluded_%s.profile", pop, pheno_code, p_val)
+  data <- read_table(file_path, col_names = TRUE) %>% mutate(POP = pop)
+  total_score <- bind_rows(total_score, data)
+}
+
+# Standardise
+total_score <- mutate(total_score, SCORE = scale(SCORE))
+
+# Identify subpopulations
+total_score <- inner_join(total_score, subpop_metadata, by = "IID")
+
+# Split polygenic risk scores according to ancestry
+pop_sep <- split(total_score, total_score$POP)
+
+# Add GBR to each for comparison
+GBR <- subset(total_score, subpop == "GBR")
+
+for (pop in pops) {
+
+  if (pop != "EUR"){
+pop_sep[[pop]] <- rbind(GBR, pop_sep[[pop]])
+  }
+}
+
+# Generate plots
+plots <- list()
+
+## Define colour for each subpopulation
+colours_subpop <- c(ACB = "#FEE5D9", ASW = "#FCBBA1", ESN = "#FC9272", GWD = "#FB6A4A", LWK = "#EF3B2C", MSL = "#CB181D", YRI = "#99000D", CLM = "#FFFFCC", MXL = "#C2E699", PEL = "#78C679", PUR = "#238443", CDX = "#F2F0F7", CHB = "#CBC9E2", CHS = "#9E9AC8", JPT = "#756BB1", KHV = "#54278F", CEU ="#EFF3FF", FIN = "#BDD7E7", GBR = "#6BAED6", IBS = "#3182BD", TSI = "#08519C",NCIGP2 = "#EDF8FB", NCIGP3 = "#B2E2E2", NCIGP1 = "#66C2A4", NCIGP4 = "#238B45", BEB = "#FFFFD4", GIH = "#FED98E", ITU = "#FE9929", PJL = "#D95F0E", STU = "#993404")
+
+## Plot
+for (pop in names(pop_sep)) {
+  population_data <- pop_sep[[pop]]
+  
+  PRS <- ggplot(population_data, aes(x = fct_relevel(subpop, "GBR"), y = SCORE, fill = subpop)) +
+    geom_boxplot() +
+    scale_y_continuous(name = "Polygenic Risk Score", limits = c(-5, 5)) +
+    scale_fill_manual(values = colours_subpop) +
+    theme_light() +
+    labs(title = pop,
+         x = NULL,
+         y = NULL) +
+    theme(text = element_text(family = "Arial", size = 14),
+          plot.title = element_text(hjust = 0.5, face = "bold", size = 13),
+          axis.title.x = element_blank(), 
+          axis.title.y = element_blank(),
+          plot.margin = margin(b = 20, l = 15)) +
+    guides(fill = "none")
+  
+
+  plots[[pop]] <- PRS
+}
+
+combined_plot <- plot_grid(plotlist = plots, ncol = 2, align = "hv",
+                            axis = "tblr")
+
+combined_plot <- ggdraw(combined_plot) +
+  draw_label("Subpopulation", x = 0.5, y = -0.02, size = 14, fontfamily = "Arial") +
+  draw_label("Polygenic Risk Score", angle = 90, x = -0.02, y = 0.5, size = 14, fontfamily = "Arial") +
+  draw_label(phenotype, x = 0.5, y = 1.02, size = 14, fontface = "bold", fontfamily = "Arial") +
+  theme(axis.title = element_text(hjust = 0.5, margin = margin(b = 18)),
+        axis.title.y.left = element_text(margin = margin(r = 15)),
+        axis.text.x.bottom = element_text(margin = margin(t = 20)),
+        plot.margin = margin(t = 20, l = 25, b = 20, r = 10))
+  
+
+# Save
+ggsave(filename = paste0(pheno_code, "_GBRcomparison.png"), combined_plot, path = "/figures/subpop_analysis/", width = 20, height = 22, units = "cm", dpi = 600, device = "png")
+}
+```
+
+
+
+# Statistical Analysis
+
+Tukey's HSD tests were used to compare the GBR PRS with the other subpopulations as well as subpopulations within the same ancestral group. Spearman's rank correlation helped determine changes in individual PRS rank following FST filtration.
+
+
+## Tukey's HSD tests
+
+### GBR vs other subpopulations
+
+The following code chunks conduct Tukey's HSD tests across all phenotypes and visualise the results as heatmaps.
+
+Control PRS:
+
+```{r}
+# First turn off scientific notation to aid with analysis of small p-values
+options(scipen = 999)
+
+# Specify subset
+subset <- "control"
+
+pops <- c("AFR", "AMR", "EAS", "EUR", "SAS", "OCE")
+
+tukey_results <- list()
+
+for (i in seq_along(metadata$phenotype_code)) {
+  pheno_code <- metadata$phenotype_code[i]
+  ## Generate combined data frame storing all PRS data
+  total_score <- data.frame()
+  setwd(sprintf("/PRS/%s/%s/", pheno_code, subset))
+  
+  for (pop in pops) {
+    file_path <- sprintf("PRS_%s_%s_UKB_control_p0.0001.profile", pop, pheno_code)
+    data <- read_table(file_path, col_names = TRUE) %>% mutate(POP = pop)
+    data$SCORE <- as.numeric(data$SCORE)
+    total_score <- bind_rows(total_score, data)
+  }
+  
+  ## Standardise PRS
+  total_score <- mutate(total_score, SCORE = scale(SCORE))
+  
+  ## Add subpopulation info
+  total_score <- inner_join(total_score, subpop_metadata, by = "IID")
+  
+  ## ANOVA and Tukey's HSD
+  anova <- aov(SCORE ~ subpop, data = total_score)
+  tukey <- TukeyHSD(anova)
+  
+  ## Extract p-values from Tukey output as separate matrix, with pairwise comparisons as separate columns
+  tukey_df <- as.data.frame(tukey[["subpop"]])
+  tukey_df <- select(tukey_df, `p adj`)
+  
+    ### Only retain comparisons with GBR
+    tukey_df <- tukey_df[grep("GBR", rownames(tukey_df)), , drop = FALSE]
+  
+  tukey_df <- t(tukey_df)
+  rownames(tukey_df) <- NULL
+  
+  ## Add pheno_code as column
+  phenotype_code <- rep(pheno_code, nrow(tukey_df))
+  tukey_df <- cbind(tukey_df, phenotype_code)
+  
+  tukey_results[[pheno_code]] <- tukey_df
+}
+  
+subpop_tukey_control <- do.call(rbind, tukey_results)
+subpop_tukey_control <- as.data.frame(subpop_tukey_control)
+
+# Save
+write_delim(subpop_tukey_control, "/PRS/subpop_tukey_control.txt", delim = "\t", col_names = T)
+
+# Return scientific notation if needed
+options(scipen = 0)
+```
+
+
+Make heatmap:
+
+```{r}
+subpop_tukey_control <- subpop_tukey_control %>% rename("ACB-GBR" = "GBR-ACB", "ASW-GBR" = "GBR-ASW", "BEB-GBR" = "GBR-BEB", "CDX-GBR" = "GBR-CDX", "CEU-GBR" = "GBR-CEU", "CHB-GBR" = "GBR-CHB", "CHS-GBR" = "GBR-CHS", "CLM-GBR" = "GBR-CLM", "ESN-GBR" = "GBR-ESN", "FIN-GBR" = "GBR-FIN")
+
+# Reshape the data to long format
+subpop_tukey_control_long <- subpop_tukey_control %>%
+  pivot_longer(cols = -phenotype_code, names_to = "comparison", values_to = "p_value") %>%
+  mutate(significance = ifelse(p_value < 0.05, "Significant", "Not Significant"))
+
+# I ordered the comparisons in terms of ancestral genetic distance (EUR, AMR, SAS, EAS, OCE, AFR)
+ancestral_order <- c("CEU-GBR", "FIN-GBR", "IBS-GBR", "TSI-GBR", "CLM-GBR", "MXL-GBR", "PEL-GBR", "PUR-GBR", "BEB-GBR", "GIH-GBR",
+                     "ITU-GBR", "PJL-GBR", "STU-GBR", "CDX-GBR", "CHB-GBR", "CHS-GBR", "JPT-GBR", "KHV-GBR", "NCIGP2-GBR", "NCIGP3-GBR", "NCIGP1-GBR", "NCIGP4-GBR", "ACB-GBR", "ASW-GBR", "ESN-GBR", "GWD-GBR", "LWK-GBR", "MSL-GBR", "YRI-GBR")
+
+subpop_tukey_control_long$comparison <- factor(subpop_tukey_control_long$comparison, levels = ancestral_order)
+
+# Create heatmap
+subpop_heatmap_control <- ggplot(data = subpop_tukey_control_long) +
+  geom_tile(aes(x = phenotype_code, y = comparison, fill = significance),
+            colour = "white") +
+  scale_fill_manual(values = c("Significant" = "orange", "Not Significant" = "moccasin")) +
+  labs(title = "A) Control PRS",
+       x = "Phenotype Code",
+       y = "Subpopulation Comparison",
+       fill = "PRS means") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        axis.title.y.left = element_text(margin = margin(r = 25, l = 10)),
+        plot.title = element_text(hjust = 0),
+  text = element_text(family = "Arial", size = 20))
+
+print(subpop_heatmap_control)
+
+# Save
+ggsave(filename = "subpop_heatmap_control.png", subpop_heatmap_control, path = "/figures/boxplots_q3.excluded/", width = 30, height = 20, units = "cm", dpi = 600, device = "png")
+```
+
+
+
+FST-filtered PRS:
+
+```{r}
+# Turn off scientific notation to aid with analysis of small p-values
+options(scipen = 999)
+
+# Specify subset
+subset <- "q3_excluded"
+
+pops <- c("AFR", "AMR", "EAS", "EUR", "SAS", "OCE")
+
+tukey_results <- list()
+
+for (i in seq_along(metadata$phenotype_code)) {
+  pheno_code <- metadata$phenotype_code[i]
+  ## Generate combined data frame storing all PRS data
+  total_score <- data.frame()
+  setwd(sprintf("/PRS/%s/%s/", pheno_code, subset))
+  
+  for (pop in pops) {
+    file_path <- sprintf("PRS_%s_%s_UKB_q3_excluded_p0.0001.profile", pop, pheno_code)
+    data <- read_table(file_path, col_names = TRUE) %>% mutate(POP = pop)
+    data$SCORE <- as.numeric(data$SCORE)
+    total_score <- bind_rows(total_score, data)
+  }
+  
+  ## Standardise PRS
+  total_score <- mutate(total_score, SCORE = scale(SCORE))
+  
+  ## Add subpopulation info
+  total_score <- inner_join(total_score, subpop_metadata, by = "IID")
+  
+  ## ANOVA and Tukey's HSD
+  anova <- aov(SCORE ~ subpop, data = total_score)
+  tukey <- TukeyHSD(anova)
+  
+  ## Extract p-values from Tukey output as separate matrix, with pairwise comparisons as separate columns
+  tukey_df <- as.data.frame(tukey[["subpop"]])
+  tukey_df <- select(tukey_df, `p adj`)
+  
+    ### Only retain comparisons with GBR
+    tukey_df <- tukey_df[grep("GBR", rownames(tukey_df)), , drop = FALSE]
+  
+  tukey_df <- t(tukey_df)
+  rownames(tukey_df) <- NULL
+  
+  ## Add pheno_code as column
+  phenotype_code <- rep(pheno_code, nrow(tukey_df))
+  tukey_df <- cbind(tukey_df, phenotype_code)
+  
+  tukey_results[[pheno_code]] <- tukey_df
+}
+  
+subpop_tukey_filtered <- do.call(rbind, tukey_results)
+subpop_tukey_filtered <- as.data.frame(subpop_tukey_filtered)
+
+# Save
+write_delim(subpop_tukey_filtered, "/PRS/subpop_tukey_filtered.txt", delim = "\t", col_names = T)
+
+# Return scientific notation if needed
+options(scipen = 0)
+```
+
+
+Make heatmap:
+
+```{r}
+# Modify comparison names
+subpop_tukey_filtered <- subpop_tukey_filtered %>% rename("ACB-GBR" = "GBR-ACB", "ASW-GBR" = "GBR-ASW", "BEB-GBR" = "GBR-BEB", "CDX-GBR" = "GBR-CDX", "CEU-GBR" = "GBR-CEU", "CHB-GBR" = "GBR-CHB", "CHS-GBR" = "GBR-CHS", "CLM-GBR" = "GBR-CLM", "ESN-GBR" = "GBR-ESN", "FIN-GBR" = "GBR-FIN")
+
+# Reshape the data to long format
+subpop_tukey_filtered_long <- subpop_tukey_filtered %>%
+  pivot_longer(cols = -phenotype_code, names_to = "comparison", values_to = "p_value") %>%
+  mutate(significance = ifelse(p_value < 0.05, "Significant", "Not Significant"))
+
+# I ordered the comparisons in terms of ancestral genetic distance (EUR, AMR, SAS, EAS, OCE, AFR)
+ancestral_order <- c("CEU-GBR", "FIN-GBR", "IBS-GBR", "TSI-GBR", "CLM-GBR", "MXL-GBR", "PEL-GBR", "PUR-GBR", "BEB-GBR", "GIH-GBR",
+                     "ITU-GBR", "PJL-GBR", "STU-GBR", "CDX-GBR", "CHB-GBR", "CHS-GBR", "JPT-GBR", "KHV-GBR", "NCIGP2-GBR", "NCIGP3-GBR", "NCIGP1-GBR", "NCIGP4-GBR", "ACB-GBR", "ASW-GBR", "ESN-GBR", "GWD-GBR", "LWK-GBR", "MSL-GBR", "YRI-GBR")
+
+subpop_tukey_filtered_long$comparison <- factor(subpop_tukey_filtered_long$comparison, levels = ancestral_order)
+
+# Create heatmap
+subpop_heatmap_filtered <- ggplot(data = subpop_tukey_filtered_long) +
+  geom_tile(aes(x = phenotype_code, y = comparison, fill = significance),
+            colour = "white") +
+  scale_fill_manual(values = c("Significant" = "orange", "Not Significant" = "moccasin")) +
+  labs(title = "B) FST-filtered PRS",
+       x = "Phenotype Code",
+       y = "Subpopulation Comparison",
+       fill = "PRS means") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        axis.title.y.left = element_text(margin = margin(r = 15, l = 10)),
+        plot.title = element_text(hjust = 0),
+  text = element_text(family = "Arial", size = 20))
+
+print(subpop_heatmap_filtered)
+
+# Save
+ggsave(filename = "subpop_heatmap_filtered.png", subpop_heatmap_filtered, path = "/figures/boxplots_q3.excluded/", width = 30, height = 20, units = "cm", dpi = 600, device = "png")
+```
+
+
+
+### Within ancestral groups
+
+Statistically significant PRS differences within each ancestral group were displayed as heatmaps, giving a total of six for each ancestry.
+
+Calculate Tukey's HSD between subpopulations (FST-filtered set):
+
+```{r}
+pops <- c("AFR", "AMR", "EAS", "EUR", "SAS", "OCE")
+
+tukey_results <- list()
+
+for (i in seq_along(metadata$phenotype_code)) {
+  pheno_code <- metadata$phenotype_code[i]
+  # Generate combined data frame storing all PRS data
+  total_score <- data.frame()
+  setwd(sprintf("/PRS/%s/q3_excluded/", pheno_code))
+  
+  for (pop in pops) {
+    file_path <- sprintf("PRS_%s_%s_UKB_q3_excluded_p0.0001.profile", pop, pheno_code)
+    data <- read_table(file_path, col_names = TRUE) %>% mutate(POP = pop)
+    data$SCORE <- as.numeric(data$SCORE)
+    total_score <- bind_rows(total_score, data)
+  }
+  
+  # Standardise PRS
+  total_score <- mutate(total_score, SCORE = scale(SCORE))
+  
+  # Add subpopulation info
+  total_score <- inner_join(total_score, subpop_metadata, by = "IID")
+
+  # Split according to ancestry
+  pop_sep <- split(total_score, total_score$POP)
+  
+  # Run analysis
+  pheno_tukey_results <- list()
+  
+  for (pop in pops) {
+    ## Extract data for the each ancestry
+    pop_data <- pop_sep[[pop]]
+    
+    ## ANOVA and Tukey's HSD
+    anova <- aov(SCORE ~ subpop, data = pop_data)
+    tukey <- TukeyHSD(anova)
+    
+    ## Extract p-values from Tukey output
+    tukey_df <- as.data.frame(tukey$subpop)
+    tukey_df <- select(tukey_df, `p adj`)
+    tukey_df <- t(tukey_df)
+    rownames(tukey_df) <- NULL
+    
+    ## Add POP and phenotype_code as columns
+    phenotype_code <- rep(pheno_code, nrow(tukey_df))
+    tukey_df <- cbind(tukey_df, phenotype_code)
+    
+    ## Store the Tukey results for each phenotype within each ancestry
+    pheno_tukey_results[[pop]] <- tukey_df
+  }
+  
+  # Store phenotype results in the tukey_results list
+  tukey_results[[pheno_code]] <- pheno_tukey_results
+}
+```
+
+
+Reshape data:
+
+```{r}
+# Create an empty list to store combined results for each ancestry
+subpop_comparisons <- list()
+
+# Loop through each ancestry
+for (pop in pops) {
+  ## Create a dataframe to store combined results for the current ancestry
+  combined_df <- data.frame()
+
+  ## Loop through each phenotype
+  for (i in seq_along(metadata$phenotype_code)) {
+    pheno_code <- metadata$phenotype_code[i]
+    
+    ### Get the Tukey results for the current ancestry and phenotype
+    tukey_df <- as.data.frame(tukey_results[[pheno_code]][[pop]])
+    
+    ### Add the Tukey results to the combined dataframe
+    combined_df <- bind_rows(combined_df, tukey_df)
+  }
+  
+  ## Turn the combined dataframe into long format for heatmap
+  combined_df_long <- combined_df %>%
+    pivot_longer(cols = -phenotype_code, names_to = "comparison", values_to = "p_value") %>%
+    mutate(significance = ifelse(p_value < 0.05, "Significant", "Not Significant"))
+  
+  ## Store the combined dataframe for the current ancestry
+  subpop_comparisons[[pop]] <- combined_df_long
+}
+```
+
+
+Colour-coded heatmaps:
+
+```{r}
+heatmaps_subpop <- list()
+
+# Define colour gradient for each ancestry
+gradients <- list(
+  AFR = scale_fill_manual(values = c("Significant" = "#FE2712", "Not Significant" = "#FCCCC5")),
+  AMR = scale_fill_manual(values = c("Significant" = "#6AD749", "Not Significant" = "#DEF0D3")),
+  EAS = scale_fill_manual(values = c("Significant" = "#EE82EE", "Not Significant" = "#F2E4F1")),
+  EUR = scale_fill_manual(values = c("Significant" = "#29B6F6", "Not Significant" = "#C9EDFF")),
+  SAS = scale_fill_manual(values = c("Significant" = "#FF8C00", "Not Significant" = "#FCD0B3")),
+  OCE = scale_fill_manual(values = c("Significant" = "forestgreen", "Not Significant" = "#B3DBC7")))
+
+# Plot
+for (pop in pops) {
+  
+  heatmap <- ggplot(subpop_comparisons[[pop]]) +
+  geom_tile(aes(x = phenotype_code, y = comparison, fill = significance), 
+              colour = "white") +
+  coord_fixed() +
+  gradients[[pop]] +
+  labs(title = pop,
+       x = "Phenotype Code",
+       y = "Subpopulation Comparison",
+       fill = "PRS means") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 12),
+        axis.title.y.left = element_text(margin = margin(r = 10)),
+        plot.title = element_text(hjust = 0.5, size = 18, face = "bold"),
+        text = element_text(family = "Arial", size = 17),
+        legend.box.spacing = unit(0.5, "cm"))
+ 
+  
+  heatmaps_subpop[[pop]] <- heatmap
+
+# Save
+ggsave(filename = paste0(pop, "_subpop_tukey_heatmap.png"), heatmap, path = "/figures/subpop_analysis/heatmaps/", width = 22, height = 15, units = "cm", dpi = 600, device = "png")
+}
+```
+
+
+
+Same colour for all:
+
+```{r}
+heatmaps_subpop <- list()
+
+# Plot
+for (pop in pops) {
+  
+  heatmap <- ggplot(subpop_comparisons[[pop]]) +
+  geom_tile(aes(x = phenotype_code, y = comparison, fill = significance), 
+              colour = "white") +
+  coord_fixed() +
+  scale_fill_manual(values = c("Significant" = "orange", "Not Significant" = "moccasin")) +
+  labs(title = pop,
+       x = "Phenotype Code",
+       y = "Subpopulation Comparison",
+       fill = "PRS means") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 12),
+        axis.title.y.left = element_text(margin = margin(r = 10)),
+        plot.title = element_text(hjust = 0.5, size = 18, face = "bold"),
+        text = element_text(family = "Arial", size = 17),
+        legend.box.spacing = unit(0.5, "cm"))
+ 
+  
+  heatmaps_subpop[[pop]] <- heatmap
+
+# Save
+ggsave(filename = paste0(pop, "_subpop_tukey_heatmap_samecolour.png"), heatmap, path = "/figures/subpop_analysis/heatmaps/", width = 22, height = 15, units = "cm", dpi = 600, device = "png")
+}
+```
+
+
+Supplementary tables indicating the number of statistically significant differences within an ancestry:
+
+```{r}
+signif_subpops <- list()
+
+for (pop in pops) {
+  data <- as.data.frame(subpop_comparisons[[pop]])
+  
+  # Summarise data
+  tukey_summary <- data %>%
+    group_by(comparison) %>%
+    summarise("Number of differences (p < 0.05)" = sum(p_value < 0.05)) %>%
+    rename("Subpopulations" = comparison)
+  
+  # Save in list if needed for R analysis
+  signif_subpops[[pop]] <- tukey_summary
+  
+  # Save file
+  write_delim(tukey_summary, file = paste0("/figures/subpop_analysis/heatmaps/", pop, "_tukey_summary.txt"), delim = "\t", col_names = T)
+}
+```
+
+
+
+## Tukey Analysis Questions
+
+### How many subpopulations overlapped with GBR per phenotype?
+
+```{r}
+# For the control set
+tukey_control_sum <- NULL
+
+for (pheno_code in (metadata$phenotype_code)) {
+  overlap_control <- subpop_tukey_control %>% 
+    filter(phenotype_code == pheno_code) %>% 
+    select(where(~ . >= 0.05))
+  
+  n <- ncol(overlap_control) - 1
+    ## Minus 1 to account for the column that contains the pheno_code
+  
+  tukey_control_sum <- rbind(tukey_control_sum, data.frame(pheno_code = pheno_code, overlap_control = n))
+}
+
+
+# Filtered set
+tukey_filtered_sum <- NULL
+
+for (pheno_code in (metadata$phenotype_code)) {
+  overlap_filtered <- subpop_tukey_filtered %>% 
+    filter(phenotype_code == pheno_code) %>% 
+    select(where(~ . >= 0.05))
+  
+  n <- ncol(overlap_filtered) - 1
+  
+  tukey_filtered_sum <- rbind(tukey_filtered_sum, data.frame(pheno_code = pheno_code, overlap_filtered = n))
+}
+
+
+# Comparison
+pheno_overlap <- inner_join(tukey_control_sum, tukey_filtered_sum, by = "pheno_code")
+pheno_overlap <- mutate(pheno_overlap, increase = overlap_filtered - overlap_control)
+
+  ## Save
+  write_delim(pheno_overlap, "/PRS/GBR_overlap_control_vs_filtered.txt", delim = "\t", col_names = T)
+
+# Mean and SD
+mean(pheno_overlap$increase)
+sd(pheno_overlap$increase)
+```
+
+
+Plot phenotypes that showed increased GBR-overlap:
+
+```{r}
+# Convert overlap to %
+pheno_overlap <- pheno_overlap %>% 
+  mutate(
+    overlap_control_prop = (overlap_control/29)*100,
+    overlap_filtered_prop = (overlap_filtered/29)*100
+  )
+
+# Plot
+pheno_overlap_plot <- ggplot(pheno_overlap, aes(x = reorder(pheno_code, overlap_control))) +
+  geom_bar(aes(y = overlap_filtered_prop, fill = "FST-filtered"), stat = "identity", position = position_dodge(width = 0.4), width = 0.8) +
+  geom_bar(aes(y = overlap_control_prop, fill = "Control"), stat = "identity", position = "dodge", width = 0.3) +
+  labs(
+    title = NULL,
+    x = "Phenotype Code",
+    y = "Subpopulations with GBR-overlap (%)", 
+  ) +
+  scale_fill_manual(values = c("Control" = "#0072B2", "FST-filtered" = "#56B4E9"), name = "PRS set",
+    labels = c("Control", "FST-filtered")) +
+  theme_minimal() +
+  guides(fill = guide_legend(title = "PRS set")) +
+  theme(
+    text = element_text(family = "Arial", size = 14),
+    axis.text.x = element_text(angle = 45, hjust = 1), 
+    legend.position = "right",
+    plot.margin = margin(t = 20, unit = "pt")
+  )
+
+# Save
+ggsave(filename = "increased_overlap_phenotypes.png", pheno_overlap_plot, path = "/figures/subpop_analysis/", width = 22, height = 10, units = "cm", dpi = 600, device = "png")
+```
+
+
+Statistics for those that saw a decrease:
+```{r}
+decreased_overlap <- pheno_overlap %>%
+  filter(increase < 1)
+
+# Mean control overlap
+mean(decreased_overlap$overlap_control)
+sd(decreased_overlap$overlap_control)
+
+# Mean decrease
+mean(decreased_overlap$increase)
+```
+
+
+
+### How many times did each subpopulation overlap with GBR in the control vs filtered set (across phenotypes)? 
+
+```{r}
+# For control (using long-format tukey results)
+subpop_overlap_control <- subpop_tukey_control_long %>%
+  filter(p_value >= 0.05) %>%
+  group_by(comparison) %>%
+  summarise(overlaps_control = n())
+
+# For filtered
+subpop_overlap_filtered <- subpop_tukey_filtered_long %>%
+  filter(p_value >= 0.05) %>%
+  group_by(comparison) %>%
+  summarise(overlaps_filtered = n())
+
+# Compare
+subpop_overlap <- inner_join(subpop_overlap_control, subpop_overlap_filtered, by = "comparison")
+subpop_overlap <- mutate(subpop_overlap, increase = overlaps_filtered - overlaps_control)
+
+# Save
+write_delim(subpop_overlap, "/PRS/subpop_overlap.txt", delim = "\t", col_names = T)
+```
+
+
+As barplots for each subpopulation:
+
+```{r}
+# Extract non-GBR subpopulation names from each comparison
+subpop_overlap <- subpop_overlap %>%
+  separate(comparison, into = c("pop1", "pop2"), sep = "-", remove = FALSE)
+
+df1 <- subset(subpop_overlap, pop1 == "GBR")
+df1 <- select(df1, subpop = pop2, overlaps_control, overlaps_filtered)
+
+df2 <- subset(subpop_overlap, pop2 == "GBR")
+df2 <- select(df2, subpop = pop1, overlaps_control, overlaps_filtered)
+
+subpop_overlap <- rbind(df1, df2)
+
+# Assign ancestral groups
+subpops <- list(
+  AFR = c("ACB", "ASW", "ESN", "GWD", "LWK", "MSL", "YRI"),
+  AMR = c("CLM", "MXL", "PEL", "PUR"),
+  EAS = c("CDX", "CHB", "CHS", "JPT", "KHV"),
+  SAS = c("BEB", "GIH", "ITU", "PJL", "STU"),
+  EUR = c("CEU", "FIN", "IBS", "TSI"),
+  OCE = c("NCIGP2", "NCIGP3", "NCIGP1", "NCIGP4")
+)
+
+subpop_overlap <- subpop_overlap %>%
+  mutate(
+    pop = case_when(
+      subpop %in% subpops$AFR ~ "AFR",
+      subpop %in% subpops$AMR ~ "AMR",
+      subpop %in% subpops$EAS ~ "EAS",
+      subpop %in% subpops$SAS ~ "SAS",
+      subpop %in% subpops$EUR ~ "EUR",
+      subpop %in% subpops$OCE ~ "OCE",
+      TRUE ~ NA_character_
+    )
+  )
+
+# Reshape data
+reshaped_subpop_overlap <- subpop_overlap %>%
+  pivot_longer(cols = c(overlaps_control, overlaps_filtered),
+               names_to = "prs_set",
+               values_to = "overlap")
+
+# Change overlap columns to proportions
+reshaped_subpop_overlap <- reshaped_subpop_overlap %>%
+  mutate(overlap_prop = (overlap/25)*100)
+```
+
+
+```{r}
+# Define the desired color palette
+colors <- c("overlaps_control" = "#0072B2", "overlaps_filtered" = "#56B4E9")
+
+subpop_order <- c("CEU", "IBS", "TSI", "FIN", "PUR", "CLM", "MXL", "PEL", "PJL", "GIH", "BEB", "ITU", "STU", "KHV", "CHB", "JPT", "CHS", "CDX", "NCIGP4", "NCIGP3", "NCIGP2", "NCIGP1", "ASW", "ACB", "LWK", "GWD", "YRI", "ESN", "MSL")
+
+reshaped_subpop_overlap <- reshaped_subpop_overlap %>%
+  arrange(factor(subpop, levels = subpop_order))
+
+reshaped_subpop_overlap$subpop <- factor(reshaped_subpop_overlap$subpop, levels = subpop_order)
+
+all_subpops_overlap <- ggplot(reshaped_subpop_overlap, aes(x = subpop, y = overlap_prop, fill = prs_set)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(x = "Population", y = "Phenotypes with GBR-overlap (%)") +
+  scale_fill_manual(values = colors, name = "PRS set", labels = c("Control", "FST-filtered")) +
+  theme_minimal() +
+  theme(
+    text = element_text(family = "Arial", size = 12),
+    legend.position = "top",
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+all_subpops_overlap
+
+ggsave(filename = "all_subpops_overlap.png", all_subpops_overlap, path = "/figures/subpop_analysis/", width = 16, height = 9.4, units = "cm", dpi = 600, device = "png")
+```
+
+
+
+### How much intra-ancestral variability was there in the FST-filtered PRS?
+
+The boxplots below show the number of GBR-overlaps per subpopulation (control and FST-filtered sets), where each is grouped by ancestry. This helps better visualise intra-ancestral PRS variability.
+
+Control set:
+
+```{r}
+pop_colors <- c("AFR" = "#FF0000", "AMR" = "#00FF00", "EAS" = "#EE82EE", "EUR" = "#1E90FF", "SAS" = "#FF8C00", "OCE" = "forestgreen")
+
+subpop_overlap$pop <- factor(subpop_overlap$pop, levels = c("EUR", "AMR", "SAS", "EAS", "OCE", "AFR"))
+
+gbr_overlaps_control <- ggplot(subpop_overlap, aes(x = pop, y = overlaps_control, fill = pop)) +
+  geom_boxplot() +
+  geom_jitter(aes(color = subpop), width = 0.1, size = 1, colour = "black") +
+  scale_fill_manual(values = alpha(pop_colors, alpha = 0.5)) +
+  labs(title = "A) Control PRS",
+       x = "Ancestral Group",
+       y = "Phenotypes with GBR-overlap") +
+  guides(fill = "none") +
+  theme_minimal() +
+  geom_text(aes(label = subpop), position = position_jitter(width = 0.3), vjust = -0.5) +
+  theme(axis.text.x = element_text(hjust = 1),
+        text = element_text(family = "Arial", size = 18),
+        axis.title.y.left = element_text(margin = margin(r = 15)),
+        axis.title.x = element_text(margin = margin(t = 15)),
+        plot.title = element_text(size = 18))
+
+ggsave(filename = "gbr_overlaps_control.png", gbr_overlaps_control, path = "/figures/subpop_analysis/", width = 30, height = 20, units = "cm", dpi = 600, device = "png")
+
+gbr_overlaps_control
+```
+
+
+FST-filtered set: 
+
+```{r}
+subpop_overlap$pop <- factor(subpop_overlap$pop, levels = c("EUR", "AMR", "SAS", "EAS", "OCE", "AFR"))
+
+gbr_overlaps_filtered <- ggplot(subpop_overlap, aes(x = pop, y = overlaps_filtered, fill = pop)) +
+  geom_boxplot() +
+  geom_jitter(aes(color = subpop), width = 0.1, size = 1, colour = "black") +
+  scale_fill_manual(values = alpha(pop_colors, alpha = 0.5)) +
+  labs(title = "B) FST-filtered PRS",
+       x = "Ancestral Group",
+       y = "Phenotypes with GBR-overlap") +
+  guides(fill = "none") +
+  theme_minimal() +
+  geom_text(aes(label = subpop), position = position_jitter(width = 0.3), vjust = -0.5) +
+  theme(axis.text.x = element_text(hjust = 1),
+        text = element_text(family = "Arial", size = 18),
+        axis.title.y.left = element_text(margin = margin(r = 15)),
+        axis.title.x = element_text(margin = margin(t = 15)),
+        plot.title = element_text(size = 18))
+
+ggsave(filename = "gbr_overlaps_filtered.png", gbr_overlaps_filtered, path = "/figures/subpop_analysis/", width = 30, height = 20, units = "cm", dpi = 600, device = "png")
+```
+
+
+The standard deviation for each, if needed:
+
+```{r}
+subpop_overlap %>%
+  group_by(pop) %>%
+  summarise(
+    sd_overlaps_control = sd(overlaps_control),
+    sd_overlaps_filtered = sd(overlaps_filtered)
+  )
+```
+
+
+Can alternatively use variance:
+
+```{r}
+variance_pop_overlap <- subpop_overlap_ancestry %>%
+  group_by(POP) %>%
+  summarise(
+    variance_control = var(overlaps_control),
+    variance_filtered = var(overlaps_filtered)
+  )
+
+write_delim(variance_pop_overlap, "/PRS/variance_pop_overlap.txt", delim = "\t", col_names = T)
+```
+
+
+
+### What was the mean phenotype overlap?
+
+```{r}
+# Control
+mean(pheno_overlap$overlap_control)
+sd(pheno_overlap$overlap_control)
+
+# Filtered
+mean(pheno_overlap$overlap_filtered)
+sd(pheno_overlap$overlap_filtered)
+```
+
+
+
+### Which phenotypes had the most intra-ancestral variation?
+
+```{r}
+combined_data <- bind_rows(subpop_comparisons)
+
+pheno_intra.ancestral <- combined_data %>%
+  group_by(phenotype_code) %>%
+  summarise(sig_diff_sum = sum(as.numeric(p_value) < 0.05))
+
+write_delim(pheno_intra.ancestral, "/PRS/pheno_intra.ancestral_sums.txt", delim = "\t", col_names = T)
+```
+
+
+
+## Spearman's rank correlation
+
+First, a dataframe was created to store the standardised PRS scores for the control and FST-filtered subsets for all phenotypes.
+
+```{r}
+prs_scores <- list()
+
+subsets <- c("control", "q3_excluded")
+
+for (subset in subsets) {
+  
+  for (pheno_code in metadata$phenotype_code) {
+    # Set working directory
+    setwd(sprintf("/PRS/%s/%s/", pheno_code, subset))
+    
+    # Load PRS data
+    pops <- c("AFR", "AMR", "EAS", "EUR", "SAS", "OCE")
+    total_score <- data_frame()
+    
+    for (pop in pops) {
+    file_path <- sprintf("PRS_%s_%s_UKB_%s_p0.0001.profile", pop, pheno_code, subset)
+    data <- read_table(file_path, col_names = TRUE) %>% mutate(POP = pop)
+    total_score <- bind_rows(total_score, data)
+}
+
+# Standardise
+total_score <- mutate(total_score, SCORE = scale(SCORE))
+
+# Add subpopulation labels
+total_score <- inner_join(total_score, subpop_metadata, by = "IID")
+
+# Store data
+prs_scores[[subset]][[pheno_code]] <- total_score
+  }
+} 
+```
+
+
+
+### Specified phenotype in a given subpopulation
+
+From the above dataframe, data for a subpopulation and phenotype of interest can be extracted. This example is for Type 2 diabetes in GBR.
+
+```{r}
+# Load control set:
+subpop_control <- prs_scores$control$T2D %>%
+  subset(subpop == "GBR") %>%
+  select(IID, SCORE) %>%
+  rename(control_SCORE = SCORE)
+  
+# Load filtered set:
+subpop_filtered <- prs_scores$q3_excluded$T2D %>%
+  subset(subpop == "GBR") %>%
+  select(IID, SCORE) %>%
+  rename(filtered_SCORE = SCORE)
+  
+# Combine
+subpop_combined <- inner_join(subpop_control, subpop_filtered, by = "IID")
+
+# Spearman's correlation test
+spearman <- cor.test(subpop_combined$control_SCORE, subpop_combined$filtered_SCORE, method = "spearman")
+
+corr_results <- data.frame(
+  pheno_code,
+  rho = spearman$estimate,
+  p_value = as.numeric(spearman$p.value))
+
+row.names(corr_results) <- NULL
+
+# Plot
+subpop_combined %>% ggplot(aes(x=control_SCORE, y = filtered_SCORE)) + geom_point()
+```
+
+
+
+### All phenotypes, all subpopulations
+
+The following visualises individual PRS rank correlations for all subpopulations as a single heatmap: 
+
+```{r}
+subpops <- unique(total_score$subpop)
+
+corr_combined <- data.frame()
+
+for (pheno_code in metadata$phenotype_code) {
+
+  for (subpopulation in subpops) {
+# Load control set:
+subpop_control <- prs_scores$control[[pheno_code]]%>%
+  subset(subpop == subpopulation) %>%
+  select(IID, SCORE) %>%
+  rename(control_SCORE = SCORE)
+  
+# Load filtered set:
+subpop_filtered <- prs_scores$q3_excluded[[pheno_code]] %>%
+  subset(subpop == subpopulation) %>%
+  select(IID, SCORE) %>%
+  rename(filtered_SCORE = SCORE)
+  
+# Combine
+subpop_combined <- inner_join(subpop_control, subpop_filtered, by = "IID")
+
+# Spearman's correlation test
+spearman <- cor.test(subpop_combined$control_SCORE, subpop_combined$filtered_SCORE, method = "spearman")
+
+corr_results <- data.frame(
+  subpopulation,
+  pheno_code,
+  rho = spearman$estimate,
+  p_value = as.numeric(spearman$p.value))
+
+row.names(corr_results) <- NULL
+
+corr_combined <- rbind(corr_combined, corr_results)
+  }
+}
+
+# Add ancestral group to label on plot
+corr_combined <- corr_combined %>%
+  mutate(superpop = ifelse(subpopulation %in% AFR_samples$subpop, "AFR",
+                            ifelse(subpopulation %in% AMR_samples$subpop, "AMR",
+                                   ifelse(subpopulation %in% EUR_samples$subpop, "EUR",
+                                          ifelse(subpopulation %in% EAS_samples$subpop, "EAS",
+                                                 ifelse(subpopulation %in% SAS_samples$subpop, "SAS", 
+                                                      ifelse(subpopulation %in% OCE_samples$subpop, "OCE", NA)))))))
+
+# Define colours for each ancestry
+superpop_colours <- c(AFR = "#FE2712", AMR = "#6AD749", EAS = "#EE82EE", EUR = "#29B6F6", OCE = "forestgreen", SAS = "#FF8C00")
+
+row_colours <- superpop_colours[corr_combined$superpop]
+
+# Arrange EUR first, then others in increasing genetic distance
+subpop_order <- c("GBR", "CEU", "FIN", "IBS", "TSI", "CLM", "MXL", "PEL", "PUR", "BEB", "GIH", "ITU", "PJL", "STU", "CDX", "CHB", "CHS", "JPT", "KHV", "NCIGP2", "NCIGP3", "NCIGP1", "NCIGP4", "ACB", "ASW", "ESN", "GWD", "LWK", "MSL", "YRI")
+
+corr_combined$subpopulation <- factor(corr_combined$subpopulation, levels = subpop_order)
+
+# Plot as heatmap
+spearman_subpops <- ggplot(corr_combined, aes(x = pheno_code, y = subpopulation, fill = rho)) +
+  geom_tile(colour = "grey", linewidth = 0.05) +
+  scale_fill_viridis_b(option = "G", direction = -1, begin = 0.3) + 
+  labs(x = "Phenotype Code",
+       y = "Population",
+       fill = "Correlation") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 15),
+        axis.text.y = element_text(size = 15),
+        axis.title.y.left = element_text(margin = margin(r = 20)),
+        text = element_text(family = "Arial", size = 17))
+
+spearman_subpops
+
+# Save
+ggsave(filename = "spearman_subpops.png", spearman_subpops, path = "/figures/subpop_analysis/heatmaps/", width = 25, height = 18, units = "cm", dpi = 600, device = "png")
+
+write_delim(corr_combined, "/PRS/spearman_corr_subpops.txt", delim = "\t", col_names = T)
+```
+
+
+A bar plot showing the number of index SNPs was placed above the correlation heatmap:
+
+```{r}
+# Load dataframe containing number of index SNPs in FST-filtered set
+prs_results <- read_delim("/PRS/prs_results_subsetClumps.txt", delim = "\t", col_names = T)
+
+# Plot
+index_plot <- ggplot(prs_results, aes(x = pheno_code, y = clumps_q3_excluded, fill = "Q3 Excluded")) +
+  geom_bar(stat = "identity", position = "dodge", width = 0.7) +
+  labs(x = "Phenotype Code", y = "Number of index SNPs") +
+  scale_fill_manual(values = "#009E73") +
+  guides(fill = "none") +
+  theme_minimal() +
+  theme(text = element_text(family = "Arial", size = 17),
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        axis.title.x = element_text(margin = margin(t = 10)),
+        axis.title.y.left = element_text(margin = margin(r = 10)),
+        )
+
+# Save
+ggsave(filename = "index_barplot_for_corr.png", index_plot, path = "/figures/subpop_analysis/heatmaps/", width = 25, height = 10, units = "cm", dpi = 600, device = "png")
+```
+
+
+Combine plots:
+
+```{r}
+# Adjust barplot for merging
+index_plot <- ggplot(prs_results, aes(x = pheno_code, y = clumps_q3_excluded, fill = "Q3 Excluded")) +
+  geom_bar(stat = "identity", position = "dodge", width = 0.7) +
+  labs(x = "Phenotype Code", y = "Number of index SNPs") +
+  scale_fill_manual(values = "#009E73") +
+  guides(fill = "none") +
+  theme_minimal() +
+  theme(text = element_text(family = "Arial", size = 17),
+        axis.text.x = element_blank(),
+        axis.title.x = element_blank(),
+        axis.ticks = element_blank(),
+        axis.title.y.left = element_text(margin = margin(r = 25)),
+        plot.margin = margin(t = 15)
+        )
+
+# Merge
+combined_plot <- plot_grid(index_plot, spearman_subpops, ncol = 1, align = "v", axis = "lr", rel_heights = c(1, 3))
+
+ggsave(filename = "corr_with_barplot.png", combined_plot, path = "/figures/subpop_analysis/heatmaps/", width = 25, height = 25, units = "cm", dpi = 600, device = "png")
+```
+
+
+### Additional analysis on correlation results
+
+The correlation coefficient across phenotypes for all subpopulations ranged from 0.49 to 0.99. All correlations were statistically significant (p < 0.05), with the highest p-value only reaching 0.009. 
+
+```{r}
+# Correlation range
+range(corr_combined$rho)
+
+# p-value range
+range(corr_combined$p_value)
+```
+
+
+The average correlation across phenotypes ranged from 0.79 (DOA) to 0.97 (AST).
+
+```{r}
+# Find average correlation of each phenotype
+summary_spearman <- corr_combined %>%
+  group_by(pheno_code) %>%
+  summarise(mean_rho = mean(rho), SD = sd(rho))
+
+range(summary_spearman$mean_rho)
+```
+
+
+Average correlation per subpopulation ranged from 0.82 (ESN) to 0.96 (GBR) across all phenotypes.
+
+```{r}
+summary_subpops <- corr_combined %>%
+  group_by(subpopulation) %>%
+  summarise(subpop_mean = mean(rho), SD = sd(rho))
+
+range(summary_subpops$subpop_mean)
+```
+
+
+Average correlation per ancestry
+
+```{r}
+corr_combined %>%
+  group_by(superpop) %>%
+  summarise(ancestral_mean = mean(rho), SD = sd(rho))
+```
+
+
+
+## Mean FST of control vs FST-filtered SNPs
+
+For each phenotype, the mean FST of the control and FST-filtered index SNPs were obtained. This aided in the analysis of differing phenotype responses.
+
+FST estimates will need to be loaded if not already done so.
+
+```{r}
+fst_allSNPs <- read_delim("/FST/FST_1kGP_SNPs.fst", col_names = T)
+```
+
+
+Code for a specified phenotype and subset:
+
+```{r}
+pheno_code <- "AST"
+subset <- "control"
+
+# Extract phenotype index SNPs
+clump_results <- read_table(sprintf("/PRS/%s/%s/EUR_LD_p0.0001.clumped", pheno_code, subset))
+indexSNPs <- select(clump_results, SNP)
+
+# Match FST estimates
+indexSNPs <- inner_join(indexSNPs, fst_allSNPs, by = "SNP")
+
+# Obtain mean FST
+pheno_meanFST <- mean(indexSNPs$FST)
+```
+
+
+For all phenotypes, control subset:
+
+```{r}
+control_FSTmeans <- data.frame(pheno_code = character(), mean_FST_control = numeric())
+
+for (i in seq_along(metadata$phenotype)) {
+  pheno_code <- metadata$phenotype_code[i]
+  
+  # Extract phenotype index SNPs
+  clump_results <- read_table(sprintf("/PRS/%s/control/EUR_LD_p0.0001.clumped", pheno_code))
+  indexSNPs <- data.frame(SNP = clump_results$SNP)
+  
+  # Match FST estimates
+  indexSNPs <- inner_join(indexSNPs, fst_allSNPs, by = "SNP")
+  
+  # Obtain mean FST
+  pheno_meanFST <- mean(indexSNPs$FST)
+  pheno_FST_stdev <- sd(indexSNPs$FST)
+  
+  # Add data to table
+  pheno_row <- data.frame(pheno_code = pheno_code, mean_FST_control = pheno_meanFST, SD = pheno_FST_stdev)
+  control_FSTmeans <- rbind(control_FSTmeans, pheno_row)
+}
+
+# Range
+range(control_FSTmeans$mean_FST_control)
+
+# Save
+write_delim(control_FSTmeans, "/PRS/control_FSTmeans.txt", delim = "\t", col_names = T)
+```
+
+
+For the FST-filtered set:
+
+```{r}
+filtered_FSTmeans <- data.frame(pheno_code = character(), mean_FST_filtered = numeric())
+
+for (i in seq_along(metadata$phenotype)) {
+  pheno_code <- metadata$phenotype_code[i]
+  
+  # Extract phenotype index SNPs
+  clump_results <- read_table(sprintf("/PRS/%s/q3_excluded/EUR_LD_p0.0001.clumped", pheno_code))
+  indexSNPs <- data.frame(SNP = clump_results$SNP)
+  
+  # Match FST estimates
+  indexSNPs <- inner_join(indexSNPs, fst_allSNPs, by = "SNP")
+  
+  # Obtain mean and SD FST
+  pheno_meanFST <- mean(indexSNPs$FST)
+  pheno_FST_stdev <- sd(indexSNPs$FST)
+  
+  # Add data to table
+  pheno_row <- data.frame(pheno_code = pheno_code, mean_FST_filtered = pheno_meanFST, SD = pheno_FST_stdev)
+  filtered_FSTmeans <- rbind(filtered_FSTmeans, pheno_row)
+}
+
+# Range
+range(filtered_FSTmeans$mean_FST_filtered)
+
+# Save
+write_delim(filtered_FSTmeans, "/PRS/filtered_FSTmeans.txt", delim = "\t", col_names = T)
+```
+
+
+Add as scatterplot on top of barplot showing FST-filtration improvements (generated earlier) - if desired
+
+```{r}
+# Change phenotype order to match barplot
+control_FSTmeans_reordered <- control_FSTmeans %>%
+  arrange(match(pheno_code, increased_overlap$pheno_code))
+
+# Make scatterplot of control FST means
+control_FSTmeans_reordered$pheno_code <- factor(control_FSTmeans_reordered$pheno_code, levels = control_FSTmeans_reordered$pheno_code)
+
+scatterplot_controlFST <- ggplot(control_FSTmeans_reordered, aes(x = pheno_code, y = mean_FST_control)) +
+  geom_point() +  
+  labs(x = "Phenotype Code", y = "Mean control FST") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+scatterplot_controlFST
+
+# Combine plots
+combined_FSTplot <- plot_grid(scatterplot_controlFST, pheno_overlap_plot, ncol = 1, align = "v", axis = "lr")
+combined_FSTplot
+```
+
+
+Plot GBR overlap in control vs control index FST
+
+```{r}
+overlap_vs_fst <- inner_join(pheno_overlap, control_FSTmeans, by = "pheno_code")
+
+scatterplot <- ggplot(overlap_vs_fst, aes(x = mean_FST_control, y = overlap_control)) +
+  geom_point() +  # Scatterplot points
+  labs(x = "Mean Control FST", y = "Overlap Control") +  # Labels for axes
+  theme_minimal() 
+scatterplot
+```
+
+
+Spearman correlation for control: p value not signficant (0.7); rho = -0.084. 
+
+```{r}
+cor_spearman <- cor.test(overlap_vs_fst$overlap_control, overlap_vs_fst$mean_FST_control, method = "spearman")
+cor_spearman
+```
+
+Spearman correlation for FST-filtered ()
+
+```{r}
+cor_spearman <- cor.test(overlap_vs_fst$overlap_filtered, overlap_vs_fst$mean_FST_control, method = "spearman")
+cor_spearman
+```
+
+
+
+## Is polygenicity correlated with GBR-overlap?
+
+Do the number of SNPs in the control/FST-filtered sets determine the degree of GBR overlap?
+
+```{r}
+# Load number of index SNPs for phenotypes
+prs_results <- read_delim("/PRS/prs_results_subsetClumps.txt", delim = "\t", col_names = T)
+
+# Join with overlap results
+overlap_vs_polygenicity <- inner_join(prs_results, pheno_overlap, by = "pheno_code")
+
+# Correlation
+filtered_corr <- cor.test(overlap_vs_polygenicity$clumps_q3_excluded, overlap_vs_polygenicity$overlap_filtered, method = "spearman")
+filtered_corr
+
+control_corr <- cor.test(overlap_vs_polygenicity$clumps_control, overlap_vs_polygenicity$overlap_control, method = "spearman")
+control_corr
+```

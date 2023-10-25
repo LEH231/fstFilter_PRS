@@ -1,0 +1,94 @@
+This script describes how the PRS target data cohort was derived from the 1kGP and NCIG datasets. Specifically, it demonstrates how 1kGP biallelic SNPs were identified and confirmed to overlap with the NCIG dataset. Community affiliation metadata is also generated for the NCIG cohort. 
+
+
+
+# Packages and VCFs
+
+```{r}
+library(tidyverse)
+```
+
+
+VCFs used:
+
+- 1000 Genomes Phase 3 VCFs on GRCh38, 30x coverage (Byrska-Bishop et al. 2022), downloaded from: http://ftp.1000genomes.ebi.ac.uk/vol1/ftp/data_collections/1000G_2504_high_coverage/working/20220422_3202_phased_SNV_INDEL_SV/ 
+
+- NCIG WGS VCFs
+
+
+Files and output from other R notebooks and bash scripts will be also be used and referenced when needed.
+
+
+
+# VCF Preparation
+
+VCFs for chromosomes 1 to 22 from the 1kGP and NCIG data sets were concatenated using bcftools concat and filtered to retain biallelic SNPs. The 1kGP samples were reduced to a subset of 2504 unrelated individuals (identified in "Sorting_1KGP_Pedigree.Rmd") and the NCIG set reduced to the 161 Indigenous Australian individuals See bash scripts 1kgp_filePrep.sh and ncig_filePrep.sh for code.
+
+
+
+# Identifying Multi-allelic Variants in 1kGP Set
+
+Multi-allelic variants in the 1kGP dataset were first identified in R for subsequent exclusion in plink 1.9. 
+
+```{r}
+# Load 1kGP variants
+allVariants_1kGP <- read_delim("1kGP_SNPs.bim", col_names = c("chrom", "ID", "X3", "pos", "alt", "ref"))
+
+# Exclude variants with same position
+to_keep <- allVariants_1kGP %>%
+  group_by(chrom, pos) %>%
+  filter(n() == 1) %>%
+  ungroup()
+
+# Save for filtering plink file
+to_keep <- select(to_keep, ID)
+
+write_delim(to_keep, "1kGP_biallelicSNPs.txt", delim = "\t", col_names = F)
+```
+
+
+Of the initial 12,528,011 MAF-filtered SNPs, 12,473,426 were biallelic.
+
+
+
+# Creating Continental Files of Shared SNPs
+
+Of the 12,473,426 biallelic 1kGP SNPs identified above, 11,848,706 were shared with the NCIG cohort and had valid FST estimates in the 1kGP populations. Ancestrally-grouped files containing these shared SNPs were derived for the 1kGP and NCIG cohorts, as described in the bash script "sharedSNP_files.sh".
+
+Note that files were filtered by variant ID to ensure identical reference and alternate alleles. The following check was conducted to confirm:
+
+```{r}
+# Load NCIG file
+ncig_set <- read_delim("OCE_sharedSNPs.bim", col_names = c("chrom", "ID", "X3", "pos", "alt", "ref"))
+
+# Load 1kGP file
+onekgp_set <- read_delim("1kGP_sharedSNPs.bim", col_names = c("chrom", "ID", "X3", "pos", "alt", "ref"))
+
+# The ID columns should be identical
+identical(ncig_set$ID, onekgp_set$ID)
+```
+
+
+
+# NCIG Communities
+
+A file containing community information for the NCIG samples was created for downstream PRS analysis in the R notebook "PRS_subpop_analysis.Rmd".
+
+```{r}
+# Extract list of NCIG sample IDs
+ncig_samples_all <- read_delim("OCE_161samples.fam", delim = " ", col_names = F)
+
+ncig_samples_all <- ncig_samples_all %>%
+  select(1) %>%
+  rename(samples = X1)
+
+# Merge with community metadata
+ncig_metadata <- read_delim("samples.txt", delim = "\t")
+
+pops_ncig <- inner_join(ncig_samples_all, ncig_metadata, by = c("samples" = "vcfsampleid"))
+
+oce_community_info <- select(pops_ncig, samples, populationCode)
+
+# Save
+write_delim(oce_community_info, "/metadata/ncig_communities.txt", delim = "\t", col_names = T)
+```

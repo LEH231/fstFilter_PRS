@@ -1,0 +1,169 @@
+This document describes how the UKB summary statistics were processed to produce a final set of ~7.4 million autosomal biallelic SNPs that were used to generate the control PRS subset. For the FST-filtered subset, see "fstFiltered_UKBsumstat_prep.Rmd". 
+
+
+
+# Packages
+
+```{r}
+library(tidyverse)
+library(rtracklayer)
+library(GenomicRanges)
+```
+
+
+
+# Identifying final PRS set
+
+Summary statistic files by Thompson et al. (2022) for 22 quantitative traits and 3 diseases were downloaded from https://zenodo.org/record/6631952 (version 1). All summary statistic files used contained the same 13,628,692 genetic variants located on chromosomes 1 to X, with effect sizes and p-values differing for each trait/disease. 
+
+The following sections describe coordinate conversion to hg38, quality control checks, and additional modifications made to produce a final set of 7,397,818 biallelic SNPs. As all files shared the same variants, the type II diabetes dataset was randomly chosen for this process. 
+
+```{r}
+original_sumstat <- read_csv("/UKB_originalSumstats/T2D_UKB_WBU.csv.gz", col_names = T)
+
+# Rearrange in ascending chromosomal order
+reordered_sumstat <- original_sumstat %>%
+  arrange(factor(chrom, levels = c(paste(1:22), "X")))
+```
+
+
+
+## Conversion to hg38
+
+The summary statistic genomic coordinates were converted from hg19 to hg38 to match the 1kGP and NCIG datasets. This was done using the liftOver() function from the package rtracklayer. 
+
+```{r}
+# Import chain file
+hg19_hg38.chain <- import.chain("hg19ToHg38.over.chain")
+
+# Create BED file
+bed <- reordered_sumstat %>%
+  mutate(chromStart = pos - 1, chrom = paste0("chr", chrom)) %>%
+  select(chrom, chromStart, chromEnd = pos, cpra)
+
+# Convert to GRanges object
+gr_bed <- makeGRangesFromDataFrame(bed, starts.in.df.are.0based = T, keep.extra.columns = T)
+
+# liftOver
+hg19_to_hg38 <- as.data.frame(liftOver(gr_bed, hg19_hg38.chain))
+
+# Add new coordinates to summary statistics file
+new_coord <- hg19_to_hg38 %>% 
+  select(cpra, hg38_pos = start)
+
+sumstat_newcoord <- inner_join(reordered_sumstat, new_coord, by = "cpra")
+  # Save for future reference
+  hg38_positions <- select(sumstat_newcoord, cpra, chrom, pos, hg38_pos, ref, alt)
+  write_delim(hg38_positions, "/UKB_originalSumstats/hg38_positions.txt", delim = "\t", col_names = T)
+
+sumstat_newcoord <- mutate(sumstat_newcoord, chrom = paste0("chr", chrom))
+```
+
+
+
+## Quality control filters
+
+The original UKB datasets had previously been subjected to several quality control measures described by Thompson et al. (2022). Demonstrated below are the additional quality control filters applied, which included removing X chromosome, multi-allelic, and non-SNP variants. There were 12,037,158 SNPs remaining.  
+
+```{r}
+QC_sumstat <- sumstat_newcoord %>%
+  # Remove multi-allelic variants
+  group_by(hg38_pos, chrom) %>%
+  filter(n() == 1) %>%
+  ungroup() %>% 
+  # Remove non-SNPs 
+  filter(ref %in% c("A", "G", "T", "C") & alt %in% c("A", "G", "T", "C")) %>%
+  # Remove X chromosome variants
+  filter(chrom != "chrX")
+```
+
+
+
+## Creation of new CPRA IDs
+
+New UKB IDs were created to reflect the updated hg38 positions, which was necessary for use with the plink --clump and --score flags. Note that this assumes the UKB "ref" alleles are the same as the 1kGP "ref" alleles.
+
+```{r}
+# Create new CPRA IDs
+new_cpra <- QC_sumstat %>%
+  mutate(chr = as.numeric(gsub("chr", "", chrom))) %>%
+  select(chrom, chr, hg38_pos, ref, alt, cpra) %>%
+  unite(new_UKBcpra, chr, hg38_pos, ref, alt, sep = ":", remove = F)
+
+# Join to QC'd summary statistic file
+QC_sumstat <- inner_join(QC_sumstat, new_cpra, by = c("cpra", "ref", "alt", "chrom", "hg38_pos"))
+```
+
+
+
+## SNPs with shared CPRA IDs
+
+The 1kGP and NCIG databases were previously filtered to retain the same SNPs using plink, as described in "targetData_prep.Rmd" and "sharedSNP_files.sh". SNPs from this shared subset also found in the UKB were extracted, ultimately retaining 7,397,818 SNPs where IDs where concordant across all three databases (UKB, NCIG, 1kGP).
+
+```{r}
+# Load 1kGP variants - note that that corresponding NCIG file can also be used.
+onekgp_bim <- read_delim("1kGP_sharedSNPs.bim", delim = "\t", col_names = c("chrom", "ID", "X3", "pos", "1kgp_alt", "1kgp_ref"))
+
+# Filter for variants with identical IDs as the 9,753,147 million SNPs that share IDs in the NCIG and 1kGP datasets
+new_cpra <- filter(new_cpra, new_UKBcpra %in% onekgp_bim$ID)
+```
+
+
+As all UKB trait and disease summary statistics analysed contained the same genetic variants, this final set of QC'd SNPs was saved to aid downstream filtration. 
+
+```{r}
+write_delim(new_cpra, "/summary_statistics/UKBset_finalQCsnps.txt", delim = "\t", col_names = T)
+```
+
+
+ 
+# Modifying summary statistic files
+
+The summary statistic files were modified to contain the updated information and for plink compatibility. This included back-transforming the -log(p) values to obtain p, combining ncase and ncontrol into a single value (N) for disease traits, and selecting relevant columns for plink calculations. The final modified summary statistic files contained 7,397,818 biallelic SNPs with corresponding CPRA IDs in the 1kGP and NCIG cohorts. These were used to generate the control PRS subset.
+
+This loop requires a metadata table containing the following columns:
+- Trait or disease code (according to the UKB naming system)
+- Name of the original summary statistic file
+- Disease or trait status as indicated by a 0 or 1, respectively
+
+The table can be adjusted according to the traits or diseases required.
+
+```{r}
+metadata <- read_delim("/metadata/UKB_referenceTable.txt", delim = "\t", col_names = T)
+```
+
+
+The following loop creates modified summary statistic files with updated hg38 positions and IDs using the "new_cpra" variable generated earlier. 
+
+```{r}
+# Load new_cpra variable
+new_cpra <- read_delim("/summary_statistics/UKBset_finalQCsnps.txt", delim = "\t", col_names = T)
+
+for (i in seq_along(metadata$filename)) {
+  file_name <- metadata$filename[i]
+  file_path <- file.path("/UKB_originalSumstats/", file_name)
+
+# Read file and arrange in ascending chromosomal order
+  sumstat <- read_csv(file_path)
+  sumstat <- sumstat %>% arrange(factor(chrom, levels = c(paste(1:22), "X")))
+
+# Retain QC'd biallelic SNPs with hg38 coordinates and IDs
+  modified_sumstat <- inner_join(sumstat, new_cpra, by = "cpra")
+
+# Modify for plink compatibility
+  modified_sumstat <- modified_sumstat %>%
+  ## Back-transform p-values
+  mutate(minus_log10_p = 0-minus_log10_p, P = 10**minus_log10_p) %>%
+  ## Modify N column according to phenotype
+  mutate(N = ifelse(metadata$quantitative_trait[i] == 1, ntotal, ncase + ncontrol))
+
+# Retain key information for PRS calculation
+final_sumstat <- modified_sumstat %>%
+  select(CHR = `chrom.x`, BP = `hg38_pos`, SNP = new_UKBcpra, A1 = `alt.x`, A2 = `ref.x`, N, SE = standard_error, P, beta)
+
+# Save file
+new_path <- file.path("/summary_statistics/", paste0(metadata$phenotype_code[i], "_UKB_QC_biallelicSNPs.txt"))
+
+write_delim(final_sumstat, new_path, delim = "\t", col_names = T)
+}
+```

@@ -1,0 +1,242 @@
+This document describes the FST-based strategies investigated and applied to the UKB summary statistics processed in the notebook "control_UKBsumstat_prep.Rmd". Figures and descriptive statistics are also generated as required.
+
+
+
+# Packages
+
+```{r}
+library(tidyverse)
+```
+
+
+
+# Calculation of FST
+
+Weir and Cockerham's (1984) FST was calculated using plink 1.9 between the five 1kGP ancestral populations for all 1kGP SNPs, including those not shared with the NCIG cohort (see bash script "1kgpSNPs_FST.sh"). All SNPs had valid FST estimates (no NA values).
+
+
+## Creation of cluster files 
+
+CLuster files indicating population groupings were created for use in plink calculations. The first was used for SNP filtration and PRS purposes, and a second file was created for ancestral genetic distance calculations (including OCE samples). The third cluster file was used for subpopulation genetic distance calculations. 
+
+
+### Ancestral cluster files 
+
+Note that the following uses files created in "Sorting_1KGP_Pedigree.Rmd" assigning individuals to ancestral groups.
+
+```{r}
+# Load files with ancestral assignments
+AFR_samples <- read_delim("/1KGP_populations/AFR_samples.txt", delim = "\t", col_names = c("sample", "POP"))
+AMR_samples <- read_delim("/1KGP_populations/AMR_samples.txt", delim = "\t", col_names = c("sample", "POP"))
+EUR_samples <- read_delim("/1KGP_populations/EUR_samples.txt", delim = "\t", col_names = c("sample", "POP"))
+EAS_samples <- read_delim("/1KGP_populations/EAS_samples.txt", delim = "\t", col_names = c("sample", "POP"))
+SAS_samples <- read_delim("/1KGP_populations/SAS_samples.txt", delim = "\t", col_names = c("sample", "POP"))
+
+# Load the .fam files (plink output) to be filtered
+fam <- read_delim("1kGP_sharedSNPs.fam", delim = " ", col_names = F)
+fam <- select(fam, sample = X2)
+
+# Duplicate column to meet plink requirements
+fam <- mutate(fam, IID = sample)
+
+# Add ancestral codes
+fam <- fam %>%
+  mutate(continent = ifelse(sample %in% AFR_samples$sample, "AFR",
+                            ifelse(sample %in% AMR_samples$sample, "AMR",
+                                   ifelse(sample %in% EUR_samples$sample, "EUR",
+                                          ifelse(sample %in% EAS_samples$sample, "EAS",
+                                                 ifelse(sample %in% SAS_samples$sample, "SAS", NA))))))
+
+# Save file
+write_delim(fam, "/FST/1kGP_2504samples_clusterFile.txt", col_names = F, delim = " ")
+```
+
+
+The file for genetic distance analysis was derived as follows:
+
+```{r}
+# Create OCE cluster file
+oce_fam <- read_delim("OCE_161samples.fam", delim = " ", col_names = c("sample", "IID", "X3", "X4", "X5", "X6"))
+
+oce_fam <- oce_fam %>%
+  select(sample, IID) %>%
+  mutate(continent = "OCE")
+
+# Merge with 1kGP file
+merged_fam <- rbind(fam, oce_fam)
+
+# Save
+write_delim(merged_fam, "/FST/merged_superpop_clusterFile.txt", col_names = F, delim = " ")
+```
+
+
+### Subpopulation cluster file
+
+The following code requires the file created in "PRS_subpop_analysis.Rmd" containing subpopulation affiliation for each individual (subpop_metadata variable).
+
+```{r}
+# Load subpopulation metadata file
+subpop_metadata <- read_delim("/metadata/subpop_metadata.txt", delim = "\t", col_names = T)
+
+# Create cluster file
+subpop_fam <- inner_join(merged_fam, subpop_metadata, by = "IID")
+subpop_fam <- select(subpop_fam, -continent)
+
+# Save
+write_delim(subpop_fam, "/FST/merged_subpop_clusterFile.txt", col_names = F, delim = " ")
+```
+
+
+
+## FST estimates
+
+The plink code for estimating FST is shown below (from script "1kgpSNPs_FST.sh").
+
+```{bash}
+plink --bfile 1kGP_SNPs --fst --within 1kGP_2504samples_clusterFile.txt --out FST_1kGP_SNPs
+```
+
+
+Of the ~12 million autosomal biallelic UKB SNPs previously identified, 7,587,825 were present in the 1kGP dataset and thus had FST estimates. The following confirmed that all of the UKB SNPs processed had valid FST estimates:
+
+```{r}
+# Load FST results from plink
+fst_allSNPs <- read_delim("/FST/FST_1kGP_SNPs.fst", col_names = T)
+
+# Confirm no NA values
+subset(fst_allSNPs, FST == "NaN")
+```
+
+
+A dataframe was created containing the FST estimates of the final set of ~7.4 million QC'd UKB SNPs generated in the notebook "control_UKBsumstat_prep.Rmd". 
+
+```{r}
+# Load control PRS SNPs (~7.4 million)
+new_cpra <- read_delim("/summary_statistics/UKBset_finalQCsnps.txt", delim = "\t", col_names = T)
+
+# Join with FST estimates
+fst_UKBsnps <- inner_join(new_cpra, fst_allSNPs, by = c("new_UKBcpra" = "SNP"))
+```
+
+
+
+# FST tertiles
+
+The ~7.4 million QC'd SNPs were ranked based on FST and divided into three FST tertiles containing a subset of the summary statistics. Note that the code uses the term "quantile" rather than "tertile".
+
+```{r}
+# Load metadata table listing phenotype codes
+metadata <- read_delim("/metadata/UKB_referenceTable.txt", delim = "\t", col_names = T)
+
+# Rank SNP FST and divide into 3 tertiles
+fst_ranked <- fst_UKBsnps %>% arrange(FST)
+
+  ## Remove unnecessary columns and rename for clarity
+  fst_ranked <- fst_ranked %>%
+    select(-chrom, -CHR, -POS) %>%
+    rename(hg37_cpra = cpra)
+
+fst_groups <- split(fst_ranked, factor(sort(rank(row.names(fst_ranked))%%3)))
+
+  ## Save list of SNPs in each tertile
+  for (i in seq_along(fst_groups)) {
+  file_name <- paste0("/summary_statistics/tertile_sumstats/quantile_", i, "_SNPlist.txt")
+  write_delim(fst_groups[[i]], file = file_name, delim = "\t", col_names = T)
+  }
+
+# Create summary statistics for each phenotype
+for (i in seq_along(metadata$phenotype)) {
+  pheno_code <- metadata$phenotype_code[i]
+  file_path <- file.path("/summary_statistics", paste0(pheno_code, "_UKB_QC_biallelicSNPs.txt"))
+  
+  sumstat <- read_delim(file_path, delim = "\t", col_names = T)
+  
+  ## Divide into FST subsets
+  tertile_paths <- list.files("/summary_statistics/tertile_sumstats", pattern = "SNPlist.txt", full.names = TRUE)
+  
+  for (file in tertile_paths) {
+    tertile_SNPs <- read_delim(file)
+    sumstat_tertile <- filter(sumstat, SNP %in% tertile_SNPs$new_UKBcpra)
+  
+  ## Save tertile sets
+  tertile_number <- sub(".*quantile_(\\d+)_SNPlist.txt$", "\\1", file)
+  new_path <- file.path("/summary_statistics/tertile_sumstats", paste0(pheno_code, "_UKB_q", tertile_number, ".txt"))
+  
+  write_delim(sumstat_tertile, new_path, delim = "\t", col_names = T)
+  }
+}
+```
+
+
+## Descriptive statistics and FST distribution for tertiles
+
+Descriptive statistics for the FST of each tertile:
+```{r}
+# Tertile 1
+summary(fst_groups[["0"]][["FST"]])
+sd(fst_groups[["0"]][["FST"]])
+
+# Tertile 2
+summary(fst_groups[["1"]][["FST"]])
+sd(fst_groups[["1"]][["FST"]])
+
+# Tertile 3
+summary(fst_groups[["2"]][["FST"]])
+sd(fst_groups[["2"]][["FST"]])
+```
+
+
+FST distribution with tertile cut-offs indicated in red:
+
+```{r}
+fst_distribution <- ggplot(data = fst_UKBsnps, aes(x = FST)) +
+  geom_histogram(binwidth = 0.01, fill = "#56B4E9", colour = "#0072B2") +
+  labs(x = "FST", y = "Frequency") + 
+  theme_minimal() +
+  theme(axis.title.x = element_text(margin = margin(t = 10)),
+    axis.title.y = element_text(margin = margin(r = 10)),
+    text = element_text(family = "Arial", size = 12)) +
+  geom_vline(xintercept = c(0.03601, 0.08503), linetype = "dashed", color = "red")
+
+ggsave(filename = "fst_distribution_cutoffs.png", fst_distribution, path = "/quantile_filtering/", width = 16, height = 9.4, units = "cm", dpi = 600, device = "png")
+```
+
+
+
+# Removing tertile 3 SNPs
+
+The FST-filtered PRS subset was created by removing SNPs from tertile 3, which comprised the top third with the highest FST. This left 4,931,879 SNPs that were below the FST cut-off of 0.08503.   
+
+```{r}
+# Load tertile 3 SNPs to exclude
+to_exclude <- read_delim("/summary_statistics/tertile_sumstats/quantile_3_SNPlist.txt", delim = "\t", col_names = T)
+
+# Create summary statistics for each phenotype
+for (i in seq_along(metadata$phenotype)) {
+  pheno_code <- metadata$phenotype_code[i]
+  file_path <- file.path("/summary_statistics", paste0(pheno_code, "_UKB_QC_biallelicSNPs.txt"))
+  
+  sumstat <- read_delim(file_path, delim = "\t", col_names = T)
+  sumstat <- filter(sumstat, !SNP %in% to_exclude$new_UKBcpra)
+
+  ## Save FST-filtered set
+  new_path <- file.path("/summary_statistics/q3_excluded", paste0(pheno_code, "_UKB_q3excluded.txt"))
+
+  write_delim(sumstat, new_path, delim = "\t", col_names = T)
+}
+```
+
+
+
+## Descriptive statistics for control and FST-filtered subsets
+
+```{r}
+# Control
+summary(fst_UKBsnps$FST)
+sd(fst_UKBsnps$FST)
+
+# FST-filtered
+filteredFST_snps <- inner_join(sumstat, fst_allSNPs, by = "SNP")
+summary(filteredFST_snps$FST)
+sd(filteredFST_snps$FST)
+```
