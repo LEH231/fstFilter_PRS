@@ -36,5 +36,4 @@ PRS_T3_excluded.sh: plink commands for generating the FST-filtered PRS (tertile 
 
 PRS_ancestral_analysis.Rmd: Analyses PRS subsets on an ancestral level, including visualisation, statistical tests, and analysis of other factors (e.g. index SNP retention). 
 
-PRS_subpop_analysis.Rmd: Analysis PRS (control and FST-filtered subsets) on the subpopulation level.
-
+PRS_subpop_analysis.Rmd: Analyses PRS (control and FST-filtered subsets) on the subpopulation level.
