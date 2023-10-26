@@ -1,3 +1,4 @@
 # fstFilter_PRS
 
-Contained here are the scripts and SNP sets used for the PRS FST-filter project.
+This repository contains the scripts used for the PRS FST-filter project. 
+The scripts have not been modified to run directly following download, but detailed descriptions are provided throughout the code.
